@@ -7,14 +7,19 @@ use tower_http::{
     trace::{DefaultOnResponse, TraceLayer},
 };
 use tracing::metadata::Level;
-use warp::Filter;
+use warp::{Filter, Rejection, Reply};
+
+fn blob_upload() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("v2" / String / "blobs" / "upload")
+        .map(|repository| format!("Got respository: {}", repository))
+}
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let warp_filter = warp::path!("hello" / String).map(|name| format!("Hello, {}!", name));
-    let warp_service = warp::service(warp_filter);
+    let routes = blob_upload();
+    let warp_service = warp::service(routes);
 
     let service = ServiceBuilder::new()
         .layer(TraceLayer::new_for_http().on_response(DefaultOnResponse::new().level(Level::INFO)))
