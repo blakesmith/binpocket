@@ -58,7 +58,7 @@ trait BlobStore {
 
     /// Finalize the upload session, producing an immutable Digest that will
     /// be used as the blob identifier going forward.
-    fn finalize_upload(&self, session: &UploadSession) -> Result<(), BlobStoreError>;
+    fn finalize_upload(&self, session: &UploadSession) -> Result<Digest, BlobStoreError>;
 
     /// Cancel the upload, removing all state about the upload.
     fn cancel_upload(&self, session: &UploadSession) -> Result<(), BlobStoreError>;

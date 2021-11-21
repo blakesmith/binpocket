@@ -10,7 +10,7 @@ where
     Digest::try_from(value).map_err(serde::de::Error::custom)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Hash, Debug, PartialEq)]
 pub enum DigestAlgorithm {
     Sha256,
     Sha512,
@@ -31,7 +31,7 @@ impl std::fmt::Display for DigestAlgorithm {
 
 /// Content identifier for Blobs, as well as Manifest objects inside
 /// repositories.
-#[derive(Debug, PartialEq)]
+#[derive(Hash, Debug, PartialEq)]
 pub struct Digest {
     algorithm: DigestAlgorithm,
     encoded: String,
