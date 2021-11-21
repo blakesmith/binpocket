@@ -1,4 +1,9 @@
+mod digest;
+
+use async_std::io::Write;
+use digest::{deserialize_digest_string, Digest};
 use hyper::Server;
+use serde::Deserialize;
 use std::{
     collections::HashMap,
     net::{SocketAddr, TcpListener},
@@ -13,6 +18,51 @@ use tower_http::{
 use tracing::metadata::Level;
 use uuid::Uuid;
 use warp::{Filter, Rejection, Reply};
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct Media {
+    media_type: String,
+    size: u64,
+
+    #[serde(deserialize_with = "deserialize_digest_string")]
+    digest: Digest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct ImageManifest {
+    schema_version: u8,
+    config: Media,
+    layers: Vec<Media>,
+}
+
+enum BlobStoreError {}
+
+/// Used to store blobs. Blobs are keyed by an upload session identifier, until
+/// they are finalized. At finalization time, a digest is computed, and used as
+/// the primary identifier for the blob going forward. A blob effectively becomes
+/// immutable once the upload has been completed. Callers must either 'finalize'
+/// a blob upload, or cancel it.
+trait BlobStore {
+    type Writer: Write;
+
+    /// Begin uploading a blob, using the UploadSession#id as the key.
+    fn start_upload(
+        &self,
+        session: &UploadSession,
+        start_pos: u64,
+    ) -> Result<Self::Writer, BlobStoreError>;
+
+    /// Finalize the upload session, producing an immutable Digest that will
+    /// be used as the blob identifier going forward.
+    fn finalize_upload(&self, session: &UploadSession) -> Result<(), BlobStoreError>;
+
+    /// Cancel the upload, removing all state about the upload.
+    fn cancel_upload(&self, session: &UploadSession) -> Result<(), BlobStoreError>;
+}
 
 #[derive(Clone)]
 struct State {
