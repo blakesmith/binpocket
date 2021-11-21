@@ -1,9 +1,9 @@
 mod digest;
+mod manifest;
 
 use async_std::io::Write;
-use digest::{deserialize_digest_string, Digest};
+use digest::Digest;
 use hyper::Server;
-use serde::Deserialize;
 use std::{
     collections::HashMap,
     net::{SocketAddr, TcpListener},
@@ -19,26 +19,7 @@ use tracing::metadata::Level;
 use uuid::Uuid;
 use warp::{Filter, Rejection, Reply};
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct Media {
-    media_type: String,
-    size: u64,
-
-    #[serde(deserialize_with = "deserialize_digest_string")]
-    digest: Digest,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct ImageManifest {
-    schema_version: u8,
-    config: Media,
-    layers: Vec<Media>,
-}
-
+/// Errors return from Blob Store operations.
 enum BlobStoreError {}
 
 /// Used to store blobs. Blobs are keyed by an upload session identifier, until
