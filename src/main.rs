@@ -7,18 +7,29 @@ use tower_http::{
     trace::{DefaultOnResponse, TraceLayer},
 };
 use tracing::metadata::Level;
+use uuid::Uuid;
 use warp::{Filter, Rejection, Reply};
 
-fn blob_upload() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::path!("v2" / String / "blobs" / "upload")
-        .map(|repository| format!("Got respository: {}", repository))
+fn blob_upload_start() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::path!("v2" / String / "blobs" / "upload").map(|repository| {
+        let upload_id = Uuid::new_v4();
+        let location = format!(
+            "/v2/{}/blobs/upload/{}",
+            repository,
+            upload_id.to_hyphenated_ref()
+        );
+        warp::http::response::Builder::new()
+            .header("Location", location)
+            .status(202)
+            .body(format!("Start blob upload for: {}", repository))
+    })
 }
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let routes = blob_upload();
+    let routes = blob_upload_start();
     let warp_service = warp::service(routes);
 
     let service = ServiceBuilder::new()
