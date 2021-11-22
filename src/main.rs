@@ -18,13 +18,15 @@ use tracing::metadata::Level;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::fmt()
+        .with_max_level(Level::DEBUG)
+        .init();
 
     let blob_store = Arc::new(
         blob::FsBlobStore::open(PathBuf::from("/tmp/blobs")).expect("Could not open blob store"),
     );
 
-    let routes = blob::blob_upload_start::<blob::FsBlobStore>();
+    let routes = blob::routes::<blob::FsBlobStore>();
     let warp_service = warp::service(routes);
 
     let service = ServiceBuilder::new()
