@@ -38,7 +38,7 @@ pub struct Digest {
 }
 
 impl Digest {
-    fn new(algorithm: DigestAlgorithm, encoded: String) -> Self {
+    pub fn new(algorithm: DigestAlgorithm, encoded: String) -> Self {
         Digest { algorithm, encoded }
     }
 }
