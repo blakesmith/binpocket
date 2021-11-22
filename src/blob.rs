@@ -1,6 +1,6 @@
-use async_std::{fs::File, io::Write};
+use async_std::{fs::File, io::Error as AIOError, io::Write};
 use bytes::{Buf, Bytes};
-use futures_util::{future, Stream, StreamExt};
+use futures_util::{future, Future, Stream, StreamExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -93,20 +93,21 @@ where
     BUF: Buf,
     S: Stream<Item = Result<BUF, warp::Error>> + Unpin,
 {
-    let _ = byte_stream
-        .take_while(|buf_result| match buf_result {
-            Ok(buf) => {
-                tracing::debug!("Got byte buffer, remaining: {}", buf.remaining());
-                future::ready(true)
-            }
-            Err(err) => {
-                tracing::debug!("Error getting body buffer: {:?}", err);
-                future::ready(false)
-            }
+    let upload_success = byte_stream
+        .take_while(|buf| future::ready(buf.is_ok()))
+        .map(Result::unwrap)
+        .then(|buf| {
+            tracing::debug!("Got byte buffer, remaining: {}", buf.remaining());
+            future::ok(0)
         })
-        .into_future()
+        .all(|w: Result<usize, AIOError>| future::ready(w.is_ok()))
         .await;
-    Ok(warp::http::StatusCode::ACCEPTED)
+
+    if upload_success {
+        Ok(warp::http::StatusCode::ACCEPTED)
+    } else {
+        Ok(warp::http::StatusCode::INTERNAL_SERVER_ERROR)
+    }
 }
 
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
