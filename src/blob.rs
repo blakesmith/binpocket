@@ -1,5 +1,11 @@
-use async_std::{fs::File, io::Error as AIOError, io::Write};
+use async_std::{
+    fs::File,
+    io::Error as AIOError,
+    io::Write,
+    task::{Context, Poll},
+};
 use bytes::Buf;
+use core::pin::Pin;
 use futures_util::{future, Stream, StreamExt};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,6 +18,7 @@ use crate::digest::{Digest, DigestAlgorithm};
 #[derive(Debug)]
 enum BlobStoreError {
     AIO(async_std::io::Error),
+    Unknown,
 }
 
 /// Used to store blobs. Blobs are keyed by an upload session identifier, until
@@ -20,10 +27,19 @@ enum BlobStoreError {
 /// immutable once the upload has been completed. Callers must either 'finalize'
 /// a blob upload, or cancel it.
 pub trait BlobStore {
-    type Writer: Write;
+    type Writer: Write + Unpin;
 
-    /// Begin uploading a blob, returns the session_id as a Uuid
+    /// Begin uploading a blob, returns the session_id as a Uuid. After calling,
+    /// clients should now be able to call 'get_session'.
     fn start_upload(&self) -> Result<Uuid, BlobStoreError>;
+
+    /// Retrieve the underlying session, and its associated writer, at the given
+    /// byte offset position.
+    fn get_session(
+        &self,
+        session_id: &Uuid,
+        pos: u64,
+    ) -> Result<UploadSession<Self::Writer>, BlobStoreError>;
 
     /// Finalize the upload session, producing an immutable Digest that will
     /// be used as the blob identifier going forward.
@@ -33,10 +49,34 @@ pub trait BlobStore {
     fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError>;
 }
 
-struct UploadSession<W: Write> {
+struct UploadSession<W: Write + Unpin> {
     id: Uuid,
     writer: W,
     bytes_written: u64,
+}
+
+impl<W: Write + Unpin> Write for UploadSession<W> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, AIOError>> {
+        match Pin::new(&mut self.writer).poll_write(cx, buf) {
+            Poll::Ready(Ok(bytes_written)) => {
+                self.bytes_written += bytes_written as u64;
+                Poll::Ready(Ok(bytes_written))
+            }
+            otherwise => otherwise,
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), AIOError>> {
+        Pin::new(&mut self.writer).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), AIOError>> {
+        Pin::new(&mut self.writer).poll_close(cx)
+    }
 }
 
 pub struct FsBlobStore {
@@ -58,6 +98,14 @@ impl BlobStore for FsBlobStore {
         Ok(Uuid::new_v4())
     }
 
+    fn get_session(
+        &self,
+        session_id: &Uuid,
+        pos: u64,
+    ) -> Result<UploadSession<Self::Writer>, BlobStoreError> {
+        Err(BlobStoreError::Unknown)
+    }
+
     fn finalize_upload(&self, session_id: &Uuid) -> Result<Digest, BlobStoreError> {
         Ok(Digest::new(DigestAlgorithm::Sha256, "deadbeef".to_string()))
     }
@@ -67,7 +115,7 @@ impl BlobStore for FsBlobStore {
     }
 }
 
-impl<W: Write> UploadSession<W> {
+impl<W: Write + Unpin> UploadSession<W> {
     fn new(writer: W) -> Self {
         Self {
             id: Uuid::new_v4(),

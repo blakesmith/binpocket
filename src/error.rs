@@ -15,6 +15,10 @@ pub struct ErrorMessage {
     detail: String,
 }
 
+/// This is an encapsulation of the Error Codes structure
+/// for all 4xx level responses in the OCI distribution spec
+/// See: https://github.com/opencontainers/distribution-spec/blob/main/spec.md#error-codes
+/// for the structure of error codes, and the full list.
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     #[serde(skip_serializing)]
