@@ -1,5 +1,6 @@
 mod blob;
 mod digest;
+mod error;
 mod manifest;
 
 use hyper::Server;
@@ -15,6 +16,7 @@ use tower_http::{
     trace::{DefaultOnResponse, TraceLayer},
 };
 use tracing::metadata::Level;
+use warp::Filter;
 
 #[tokio::main]
 async fn main() {
@@ -26,7 +28,7 @@ async fn main() {
         blob::FsBlobStore::open(PathBuf::from("/tmp/blobs")).expect("Could not open blob store"),
     );
 
-    let routes = blob::routes::<blob::FsBlobStore>();
+    let routes = blob::routes::<blob::FsBlobStore>().recover(error::handle_rejection);
     let warp_service = warp::service(routes);
 
     let service = ServiceBuilder::new()

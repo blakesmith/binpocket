@@ -1,6 +1,6 @@
 use async_std::{fs::File, io::Error as AIOError, io::Write};
-use bytes::{Buf, Bytes};
-use futures_util::{future, Future, Stream, StreamExt};
+use bytes::Buf;
+use futures_util::{future, Stream, StreamExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -97,6 +97,7 @@ where
         .take_while(|buf| future::ready(buf.is_ok()))
         .map(Result::unwrap)
         .then(|buf| {
+            // TODO: Do the write here!
             tracing::debug!("Got byte buffer, remaining: {}", buf.remaining());
             future::ok(0)
         })
@@ -104,7 +105,7 @@ where
         .await;
 
     if upload_success {
-        Ok(warp::http::StatusCode::ACCEPTED)
+        Ok(warp::http::StatusCode::CREATED)
     } else {
         Ok(warp::http::StatusCode::INTERNAL_SERVER_ERROR)
     }
