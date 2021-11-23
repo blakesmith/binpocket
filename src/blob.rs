@@ -1,3 +1,4 @@
+use async_lock::{Mutex, RwLock};
 use async_std::{
     fs::{File, OpenOptions},
     io::{prelude::SeekExt, Error as AIOError, SeekFrom, Write, WriteExt},
@@ -8,6 +9,7 @@ use bytes::Buf;
 use core::pin::Pin;
 
 use futures_util::{Stream, StreamExt};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -20,6 +22,7 @@ use crate::digest::{Digest, DigestAlgorithm};
 #[allow(dead_code)]
 pub enum BlobStoreError {
     AIO(async_std::io::Error),
+    SessionNotFound(Uuid),
     Unknown,
 }
 
@@ -50,7 +53,7 @@ pub trait BlobStore {
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Result<UploadSession<Self::Writer>, BlobStoreError>;
+    ) -> Result<Arc<Mutex<UploadSession<Self::Writer>>>, BlobStoreError>;
 
     /// Finalize the upload session, producing an immutable Digest that will
     /// be used as the blob identifier going forward.
@@ -92,6 +95,14 @@ impl<W: Write + Unpin + Send> Write for UploadSession<W> {
 
 pub struct FsBlobStore {
     root_directory: PathBuf,
+
+    /// Sessions are potentially accessed across multiple different
+    /// endpoint calls, since we want to support chunked uploading. We
+    /// must wrap each session in its own lock for safety.
+    ///
+    /// TODO: We must periodically clean this up to prevent resource
+    /// leaks!
+    sessions: RwLock<HashMap<Uuid, Arc<Mutex<UploadSession<File>>>>>,
 }
 
 impl FsBlobStore {
@@ -100,7 +111,10 @@ impl FsBlobStore {
     pub fn open(root_directory: PathBuf) -> Result<Self, std::io::Error> {
         std::fs::create_dir_all(root_directory.join("sessions"))?;
         std::fs::create_dir_all(root_directory.join("blobs"))?;
-        Ok(Self { root_directory })
+        Ok(Self {
+            root_directory,
+            sessions: RwLock::new(HashMap::new()),
+        })
     }
 }
 
@@ -110,7 +124,7 @@ impl BlobStore for FsBlobStore {
 
     async fn start_upload(&self) -> Result<Uuid, BlobStoreError> {
         let session_id = Uuid::new_v4();
-        let _ = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
@@ -120,26 +134,34 @@ impl BlobStore for FsBlobStore {
                     .join(format!("{}", session_id.to_hyphenated_ref())),
             )
             .await?;
-        Ok(session_id)
+        let session = UploadSession::new(file, session_id.clone());
+        self.sessions
+            .write()
+            .await
+            .insert(session_id.clone(), Arc::new(Mutex::new(session)));
+        Ok(session_id.clone())
     }
 
     async fn get_session(
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Result<UploadSession<Self::Writer>, BlobStoreError> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(
-                self.root_directory
-                    .join("sessions")
-                    .join(format!("{}", session_id.to_hyphenated_ref())),
-            )
+    ) -> Result<Arc<Mutex<UploadSession<Self::Writer>>>, BlobStoreError> {
+        let session = self
+            .sessions
+            .read()
+            .await
+            .get(session_id)
+            .ok_or(BlobStoreError::SessionNotFound(session_id.clone()))?
+            .clone();
+
+        session
+            .lock()
+            .await
+            .writer
+            .seek(SeekFrom::Start(pos))
             .await?;
-        file.seek(SeekFrom::Start(pos)).await?;
-        Ok(UploadSession::new(file))
+        Ok(session)
     }
 
     async fn finalize_upload(&self, _session_id: &Uuid) -> Result<Digest, BlobStoreError> {
@@ -152,9 +174,9 @@ impl BlobStore for FsBlobStore {
 }
 
 impl<W: Write + Unpin + Send> UploadSession<W> {
-    fn new(writer: W) -> Self {
+    fn new(writer: W, id: Uuid) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id,
             writer,
             bytes_written: 0,
         }
@@ -182,7 +204,10 @@ where
         repository,
         session_id
     );
-    let mut upload_session = blob_store.get_session(&session_id, 0).await?;
+    let session = blob_store.get_session(&session_id, 0).await?;
+
+    // Hold the upload session lock for the duration of the upload
+    let mut upload_session = session.lock().await;
     while let Some(buf) = byte_stream.next().await {
         match buf {
             Ok(b) => {
