@@ -6,7 +6,7 @@ use async_std::{
 };
 use bytes::Buf;
 use core::pin::Pin;
-use futures_util::{future, Stream, StreamExt};
+use futures_util::{future, Future, Stream, StreamExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -21,6 +21,8 @@ enum BlobStoreError {
     Unknown,
 }
 
+impl warp::reject::Reject for BlobStoreError {}
+
 /// Used to store blobs. Blobs are keyed by an upload session identifier, until
 /// they are finalized. At finalization time, a digest is computed, and used as
 /// the primary identifier for the blob going forward. A blob effectively becomes
@@ -31,7 +33,8 @@ pub trait BlobStore {
 
     /// Begin uploading a blob, returns the session_id as a Uuid. After calling,
     /// clients should now be able to call 'get_session'.
-    fn start_upload(&self) -> Result<Uuid, BlobStoreError>;
+    fn start_upload(&self)
+        -> Box<dyn Future<Output = Result<Uuid, BlobStoreError>> + Unpin + Send>;
 
     /// Retrieve the underlying session, and its associated writer, at the given
     /// byte offset position.
@@ -39,14 +42,20 @@ pub trait BlobStore {
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Result<UploadSession<Self::Writer>, BlobStoreError>;
+    ) -> Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>>>;
 
     /// Finalize the upload session, producing an immutable Digest that will
     /// be used as the blob identifier going forward.
-    fn finalize_upload(&self, session_id: &Uuid) -> Result<Digest, BlobStoreError>;
+    fn finalize_upload(
+        &self,
+        session_id: &Uuid,
+    ) -> Box<dyn Future<Output = Result<Digest, BlobStoreError>>>;
 
     /// Cancel the upload, removing all temporary upload state.
-    fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError>;
+    fn cancel_upload(
+        &self,
+        session_id: &Uuid,
+    ) -> Box<dyn Future<Output = Result<(), BlobStoreError>>>;
 }
 
 struct UploadSession<W: Write + Unpin> {
@@ -94,24 +103,35 @@ impl FsBlobStore {
 impl BlobStore for FsBlobStore {
     type Writer = File;
 
-    fn start_upload(&self) -> Result<Uuid, BlobStoreError> {
-        Ok(Uuid::new_v4())
+    fn start_upload(
+        &self,
+    ) -> Box<dyn Future<Output = Result<Uuid, BlobStoreError>> + Unpin + Send> {
+        Box::new(future::ok(Uuid::new_v4()))
     }
 
     fn get_session(
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Result<UploadSession<Self::Writer>, BlobStoreError> {
-        Err(BlobStoreError::Unknown)
+    ) -> Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>>> {
+        Box::new(future::err(BlobStoreError::Unknown))
     }
 
-    fn finalize_upload(&self, session_id: &Uuid) -> Result<Digest, BlobStoreError> {
-        Ok(Digest::new(DigestAlgorithm::Sha256, "deadbeef".to_string()))
+    fn finalize_upload(
+        &self,
+        session_id: &Uuid,
+    ) -> Box<dyn Future<Output = Result<Digest, BlobStoreError>>> {
+        Box::new(future::ok(Digest::new(
+            DigestAlgorithm::Sha256,
+            "deadbeef".to_string(),
+        )))
     }
 
-    fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError> {
-        Ok(())
+    fn cancel_upload(
+        &self,
+        session_id: &Uuid,
+    ) -> Box<dyn Future<Output = Result<(), BlobStoreError>>> {
+        Box::new(future::ok(()))
     }
 }
 
@@ -168,22 +188,30 @@ fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
         .and_then(receive_put_upload)
 }
 
+async fn start_blob_upload<B>(
+    repository: String,
+    blob_store: Arc<B>,
+) -> Result<impl Reply, Rejection>
+where
+    B: BlobStore + Send + Sync + 'static,
+{
+    let session_id = blob_store.start_upload().await?;
+    let location = format!(
+        "/v2/{}/blobs/upload/{}",
+        repository,
+        session_id.to_hyphenated_ref()
+    );
+
+    Ok(warp::http::response::Builder::new()
+        .header("Location", location)
+        .status(202)
+        .body(format!("Start blob upload for: {}", repository)))
+}
+
 fn blob_upload_start<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::post()
         .and(warp::path!("v2" / String / "blobs" / "uploads"))
         .and(warp::filters::ext::get::<Arc<B>>())
-        .map(|repository, blob_store: Arc<B>| {
-            // TODO: Fix error handling
-            let session_id = blob_store.start_upload().expect("Could not start upload");
-            let location = format!(
-                "/v2/{}/blobs/upload/{}",
-                repository,
-                session_id.to_hyphenated_ref()
-            );
-            warp::http::response::Builder::new()
-                .header("Location", location)
-                .status(202)
-                .body(format!("Start blob upload for: {}", repository))
-        })
+        .and_then(start_blob_upload)
 }
