@@ -220,7 +220,13 @@ impl BlobStore for FsBlobStore {
             .ok_or(BlobStoreError::UnsupportedDigest)
     }
 
-    async fn cancel_upload(&self, _session_id: &Uuid) -> Result<(), BlobStoreError> {
+    async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError> {
+        let _ = self
+            .sessions
+            .write()
+            .await
+            .remove(session_id)
+            .ok_or(BlobStoreError::SessionNotFound(session_id.clone()))?;
         Ok(())
     }
 }
