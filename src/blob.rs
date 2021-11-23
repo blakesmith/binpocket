@@ -1,11 +1,12 @@
 use async_std::{
     fs::{File, OpenOptions},
     io::Error as AIOError,
-    io::Write,
+    io::{Write, WriteExt},
     task::{Context, Poll},
 };
 use bytes::Buf;
 use core::pin::Pin;
+
 use futures_util::{future, Future, FutureExt, Stream, StreamExt};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +22,12 @@ pub enum BlobStoreError {
     Unknown,
 }
 
+impl From<AIOError> for BlobStoreError {
+    fn from(e: AIOError) -> Self {
+        BlobStoreError::AIO(e)
+    }
+}
+
 impl warp::reject::Reject for BlobStoreError {}
 
 /// Used to store blobs. Blobs are keyed by an upload session identifier, until
@@ -29,7 +36,7 @@ impl warp::reject::Reject for BlobStoreError {}
 /// immutable once the upload has been completed. Callers must either 'finalize'
 /// a blob upload, or cancel it.
 pub trait BlobStore {
-    type Writer: Write + Unpin;
+    type Writer: Write + Unpin + Send;
 
     /// Begin uploading a blob, returns the session_id as a Uuid. After calling,
     /// clients should now be able to call 'get_session'.
@@ -57,13 +64,13 @@ pub trait BlobStore {
     ) -> Pin<Box<dyn Future<Output = Result<(), BlobStoreError>> + Send>>;
 }
 
-pub struct UploadSession<W: Write + Unpin> {
+pub struct UploadSession<W: Write + Unpin + Send> {
     id: Uuid,
     writer: W,
     bytes_written: u64,
 }
 
-impl<W: Write + Unpin> Write for UploadSession<W> {
+impl<W: Write + Unpin + Send> Write for UploadSession<W> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -108,6 +115,7 @@ impl BlobStore for FsBlobStore {
         let session_id = Uuid::new_v4();
         Box::pin(
             OpenOptions::new()
+                .create(true)
                 .write(true)
                 .truncate(true)
                 .open(
@@ -125,7 +133,22 @@ impl BlobStore for FsBlobStore {
         pos: u64,
     ) -> Pin<Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>> + Send>>
     {
-        Box::pin(future::err(BlobStoreError::Unknown))
+        let session_cloned = session_id.clone();
+        Box::pin(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(
+                    self.root_directory
+                        .join("sessions")
+                        .join(format!("{}", session_id.to_hyphenated_ref())),
+                )
+                .then(move |file| match file {
+                    Ok(f) => future::ok(UploadSession::new(f)),
+                    Err(e) => future::err(BlobStoreError::from(e)),
+                }),
+        )
     }
 
     fn finalize_upload(
@@ -146,7 +169,7 @@ impl BlobStore for FsBlobStore {
     }
 }
 
-impl<W: Write + Unpin> UploadSession<W> {
+impl<W: Write + Unpin + Send> UploadSession<W> {
     fn new(writer: W) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -165,29 +188,33 @@ async fn receive_put_upload<B, S, BUF>(
     repository: String,
     session_id: Uuid,
     blob_store: Arc<B>,
-    byte_stream: S,
+    mut byte_stream: S,
 ) -> Result<impl Reply, Rejection>
 where
     B: BlobStore + Send + Sync + 'static,
     BUF: Buf,
     S: Stream<Item = Result<BUF, warp::Error>> + Unpin,
 {
-    let upload_success = byte_stream
-        .take_while(|buf| future::ready(buf.is_ok()))
-        .map(Result::unwrap)
-        .then(|buf| {
-            // TODO: Do the write here!
-            tracing::debug!("Got byte buffer, remaining: {}", buf.remaining());
-            future::ok(0)
-        })
-        .all(|w: Result<usize, AIOError>| future::ready(w.is_ok()))
-        .await;
-
-    if upload_success {
-        Ok(warp::http::StatusCode::CREATED)
-    } else {
-        Ok(warp::http::StatusCode::INTERNAL_SERVER_ERROR)
+    tracing::info!("Starting upload");
+    let mut upload_session = blob_store.get_session(&session_id, 0).await?;
+    tracing::info!("Chunking");
+    while let Some(buf) = byte_stream.next().await {
+        match buf {
+            Ok(b) => {
+                tracing::debug!("Got byte buffer, remaining: {}", b.remaining());
+                if let Err(e) = upload_session.write_all(b.chunk()).await {
+                    tracing::error!("Failed to write upload session data: {:?}", e);
+                    return Ok(warp::http::StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to get http buffer: {:?}", e);
+                return Ok(warp::http::StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
     }
+
+    Ok(warp::http::StatusCode::CREATED)
 }
 
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(

@@ -42,6 +42,7 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
             StatusCode::NOT_FOUND,
         ))
     } else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
+        tracing::debug!("Method not allowed: {:?}", err);
         Ok(warp::reply::with_status(
             warp::reply::json(&SimpleError {
                 message: "Method not allowed".to_string(),
