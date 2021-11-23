@@ -9,13 +9,14 @@ use bytes::Buf;
 use core::pin::Pin;
 
 use futures_util::{Stream, StreamExt};
+use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 use warp::{Filter, Rejection, Reply};
 
-use crate::digest::{Digest, DigestAlgorithm};
+use crate::{digest, digest::DigestAlgorithm};
 
 /// Errors return from Blob Store operations.
 #[derive(Debug)]
@@ -23,6 +24,7 @@ use crate::digest::{Digest, DigestAlgorithm};
 pub enum BlobStoreError {
     AIO(async_std::io::Error),
     SessionNotFound(Uuid),
+    UnsupportedDigest,
     Unknown,
 }
 
@@ -57,16 +59,26 @@ pub trait BlobStore {
 
     /// Finalize the upload session, producing an immutable Digest that will
     /// be used as the blob identifier going forward.
-    async fn finalize_upload(&self, session_id: &Uuid) -> Result<Digest, BlobStoreError>;
+    async fn finalize_upload(
+        &self,
+        session_id: &Uuid,
+        algorithm: DigestAlgorithm,
+    ) -> Result<digest::Digest, BlobStoreError>;
 
     /// Cancel the upload, removing all temporary upload state.
     async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError>;
 }
 
+/// Represents the state that needs to be tracked by the server
+/// during upload. Since this holds open writers, it must be actively
+/// cleaned up from the outstanding upload sessions that the server
+/// is tracking once an upload is completed or aborted.
 pub struct UploadSession<W: Write + Unpin + Send> {
     id: Uuid,
     writer: W,
     bytes_written: u64,
+    sha256: Sha256,
+    sha512: Sha512,
 }
 
 impl<W: Write + Unpin + Send> Write for UploadSession<W> {
@@ -78,6 +90,8 @@ impl<W: Write + Unpin + Send> Write for UploadSession<W> {
         match Pin::new(&mut self.writer).poll_write(cx, buf) {
             Poll::Ready(Ok(bytes_written)) => {
                 self.bytes_written += bytes_written as u64;
+                self.sha256.update(buf);
+                self.sha512.update(buf);
                 Poll::Ready(Ok(bytes_written))
             }
             otherwise => otherwise,
@@ -90,6 +104,30 @@ impl<W: Write + Unpin + Send> Write for UploadSession<W> {
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), AIOError>> {
         Pin::new(&mut self.writer).poll_close(cx)
+    }
+}
+
+impl<W: Write + Unpin + Send> UploadSession<W> {
+    fn new(writer: W, id: Uuid) -> Self {
+        Self {
+            id,
+            writer,
+            bytes_written: 0,
+            sha256: Sha256::new(),
+            sha512: Sha512::new(),
+        }
+    }
+
+    pub fn finalize(&mut self, algorithm: DigestAlgorithm) -> Option<digest::Digest> {
+        let sha256 = std::mem::take(&mut self.sha256);
+        let sha512 = std::mem::take(&mut self.sha512);
+        let finalized = match algorithm {
+            DigestAlgorithm::Sha256 => format!("{:x}", sha256.finalize()),
+            DigestAlgorithm::Sha512 => format!("{:x}", sha512.finalize()),
+            _ => return None,
+        };
+
+        Some(digest::Digest::new(algorithm, finalized))
     }
 }
 
@@ -164,22 +202,26 @@ impl BlobStore for FsBlobStore {
         Ok(session)
     }
 
-    async fn finalize_upload(&self, _session_id: &Uuid) -> Result<Digest, BlobStoreError> {
-        Ok(Digest::new(DigestAlgorithm::Sha256, "deadbeef".to_string()))
+    async fn finalize_upload(
+        &self,
+        session_id: &Uuid,
+        algorithm: DigestAlgorithm,
+    ) -> Result<digest::Digest, BlobStoreError> {
+        let session = self
+            .sessions
+            .write()
+            .await
+            .remove(session_id)
+            .ok_or(BlobStoreError::SessionNotFound(session_id.clone()))?;
+
+        let mut session_guard = session.lock().await;
+        session_guard
+            .finalize(algorithm)
+            .ok_or(BlobStoreError::UnsupportedDigest)
     }
 
     async fn cancel_upload(&self, _session_id: &Uuid) -> Result<(), BlobStoreError> {
         Ok(())
-    }
-}
-
-impl<W: Write + Unpin + Send> UploadSession<W> {
-    fn new(writer: W, id: Uuid) -> Self {
-        Self {
-            id,
-            writer,
-            bytes_written: 0,
-        }
     }
 }
 
