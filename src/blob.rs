@@ -9,14 +9,19 @@ use bytes::Buf;
 use core::pin::Pin;
 
 use futures_util::{Stream, StreamExt};
+use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
-use warp::{Filter, Rejection, Reply};
+use warp::{http::StatusCode, Filter, Rejection, Reply};
 
-use crate::{digest, digest::DigestAlgorithm};
+use crate::error::{ErrorCode, ErrorResponse};
+use crate::{
+    digest,
+    digest::{deserialize_digest_string, deserialize_optional_digest_string, DigestAlgorithm},
+};
 
 /// Errors return from Blob Store operations.
 #[derive(Debug)]
@@ -124,7 +129,10 @@ impl<W: Write + Unpin + Send> UploadSession<W> {
         let finalized = match algorithm {
             DigestAlgorithm::Sha256 => format!("{:x}", sha256.finalize()),
             DigestAlgorithm::Sha512 => format!("{:x}", sha512.finalize()),
-            _ => return None,
+            other => {
+                tracing::error!("Unsupported digest algorithm: {}", other);
+                return None;
+            }
         };
 
         Some(digest::Digest::new(algorithm, finalized))
@@ -214,6 +222,8 @@ impl BlobStore for FsBlobStore {
             .remove(session_id)
             .ok_or(BlobStoreError::SessionNotFound(session_id.clone()))?;
 
+        // TODO: Move the session to blob storage!
+
         let mut session_guard = session.lock().await;
         session_guard
             .finalize(algorithm)
@@ -236,9 +246,16 @@ pub fn routes<B: BlobStore + Send + Sync + 'static>(
     blob_upload_start::<B>().or(blob_upload_put::<B>())
 }
 
+#[derive(Debug, Deserialize)]
+struct BlobPutQueryParams {
+    #[serde(deserialize_with = "deserialize_optional_digest_string")]
+    digest: Option<digest::Digest>,
+}
+
 async fn receive_put_upload<B, S, BUF>(
     repository: String,
     session_id: Uuid,
+    query_params: BlobPutQueryParams,
     blob_store: Arc<B>,
     mut byte_stream: S,
 ) -> Result<impl Reply, Rejection>
@@ -262,23 +279,63 @@ where
                 tracing::debug!("Got byte buffer, remaining: {}", b.remaining());
                 if let Err(e) = upload_session.write_all(b.chunk()).await {
                     tracing::error!("Failed to write upload session data: {:?}", e);
-                    return Ok(warp::http::StatusCode::INTERNAL_SERVER_ERROR);
+                    return Ok(StatusCode::INTERNAL_SERVER_ERROR);
                 }
             }
             Err(e) => {
                 tracing::error!("Failed to get http buffer: {:?}", e);
-                return Ok(warp::http::StatusCode::INTERNAL_SERVER_ERROR);
+                return Ok(StatusCode::INTERNAL_SERVER_ERROR);
             }
         }
     }
 
-    Ok(warp::http::StatusCode::CREATED)
+    // Upload is completed. Time to validate:
+    //
+    // If the client passed a 'digest' query parameter, validate that
+    // the computed digest matches the one designated by the client,
+    // and either finalize the upload (if they match), or abort if
+    // they do not.
+
+    match query_params.digest {
+        Some(client_digest) => {
+            // Make sure we drop the lock, so we
+            // can finalize the session.
+
+            drop(upload_session);
+            let computed_digest = blob_store
+                .finalize_upload(&session_id, client_digest.algorithm.clone())
+                .await
+                .map_err(|e| {
+                    tracing::info!("Invalid digest: {:?}", e);
+                    ErrorResponse::new(
+                        StatusCode::BAD_REQUEST,
+                        ErrorCode::DigestInvalid,
+                        "Invalid digest algorithm. Must be one of: sha256, sha512".to_string(),
+                    )
+                })?;
+
+            if computed_digest != client_digest {
+                Err(ErrorResponse::new(
+                    StatusCode::BAD_REQUEST,
+                    ErrorCode::DigestInvalid,
+                    format!(
+                        "Computed digest {} does not match expected digest: {}, aborting",
+                        computed_digest, client_digest
+                    ),
+                ))?
+            } else {
+                Ok(StatusCode::CREATED)
+            }
+        }
+        None => Ok(StatusCode::CREATED),
+    }
 }
 
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
         .and(warp::path!("v2" / String / "blobs" / "uploads" / Uuid))
+        .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
         .and_then(receive_put_upload)

@@ -10,7 +10,20 @@ where
     Digest::try_from(value).map_err(serde::de::Error::custom)
 }
 
-#[derive(Hash, Debug, PartialEq)]
+pub fn deserialize_optional_digest_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<Digest>, D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    let value: Option<&str> = serde::de::Deserialize::deserialize(deserializer)?;
+    match value {
+        Some(v) => Ok(Some(Digest::try_from(v).map_err(serde::de::Error::custom)?)),
+        None => Ok(None),
+    }
+}
+
+#[derive(Clone, Hash, Debug, PartialEq)]
 pub enum DigestAlgorithm {
     Sha256,
     Sha512,
@@ -33,7 +46,7 @@ impl std::fmt::Display for DigestAlgorithm {
 /// repositories.
 #[derive(Hash, Debug, PartialEq)]
 pub struct Digest {
-    algorithm: DigestAlgorithm,
+    pub algorithm: DigestAlgorithm,
     encoded: String,
 }
 

@@ -26,6 +26,19 @@ pub struct ErrorResponse {
     errors: Vec<ErrorMessage>,
 }
 
+impl ErrorResponse {
+    pub fn new(status: StatusCode, code: ErrorCode, message: String) -> Self {
+        ErrorResponse {
+            http_code: status,
+            errors: vec![ErrorMessage {
+                code,
+                message,
+                detail: "".to_string(),
+            }],
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct SimpleError {
     message: String,
