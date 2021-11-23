@@ -16,7 +16,7 @@ use crate::digest::{Digest, DigestAlgorithm};
 
 /// Errors return from Blob Store operations.
 #[derive(Debug)]
-enum BlobStoreError {
+pub enum BlobStoreError {
     AIO(async_std::io::Error),
     Unknown,
 }
@@ -42,23 +42,23 @@ pub trait BlobStore {
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>>>;
+    ) -> Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>> + Unpin + Send>;
 
     /// Finalize the upload session, producing an immutable Digest that will
     /// be used as the blob identifier going forward.
     fn finalize_upload(
         &self,
         session_id: &Uuid,
-    ) -> Box<dyn Future<Output = Result<Digest, BlobStoreError>>>;
+    ) -> Box<dyn Future<Output = Result<Digest, BlobStoreError>> + Unpin + Send>;
 
     /// Cancel the upload, removing all temporary upload state.
     fn cancel_upload(
         &self,
         session_id: &Uuid,
-    ) -> Box<dyn Future<Output = Result<(), BlobStoreError>>>;
+    ) -> Box<dyn Future<Output = Result<(), BlobStoreError>> + Unpin + Send>;
 }
 
-struct UploadSession<W: Write + Unpin> {
+pub struct UploadSession<W: Write + Unpin> {
     id: Uuid,
     writer: W,
     bytes_written: u64,
@@ -113,14 +113,15 @@ impl BlobStore for FsBlobStore {
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>>> {
+    ) -> Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>> + Unpin + Send>
+    {
         Box::new(future::err(BlobStoreError::Unknown))
     }
 
     fn finalize_upload(
         &self,
         session_id: &Uuid,
-    ) -> Box<dyn Future<Output = Result<Digest, BlobStoreError>>> {
+    ) -> Box<dyn Future<Output = Result<Digest, BlobStoreError>> + Unpin + Send> {
         Box::new(future::ok(Digest::new(
             DigestAlgorithm::Sha256,
             "deadbeef".to_string(),
@@ -130,7 +131,7 @@ impl BlobStore for FsBlobStore {
     fn cancel_upload(
         &self,
         session_id: &Uuid,
-    ) -> Box<dyn Future<Output = Result<(), BlobStoreError>>> {
+    ) -> Box<dyn Future<Output = Result<(), BlobStoreError>> + Unpin + Send> {
         Box::new(future::ok(()))
     }
 }
