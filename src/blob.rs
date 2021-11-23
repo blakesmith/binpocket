@@ -1,13 +1,13 @@
 use async_std::{
     fs::{File, OpenOptions},
-    io::Error as AIOError,
-    io::{Write, WriteExt},
+    io::{prelude::SeekExt, Error as AIOError, SeekFrom, Write, WriteExt},
     task::{Context, Poll},
 };
+use async_trait::async_trait;
 use bytes::Buf;
 use core::pin::Pin;
 
-use futures_util::{future, Future, FutureExt, Stream, StreamExt};
+use futures_util::{Stream, StreamExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -17,6 +17,7 @@ use crate::digest::{Digest, DigestAlgorithm};
 
 /// Errors return from Blob Store operations.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum BlobStoreError {
     AIO(async_std::io::Error),
     Unknown,
@@ -35,33 +36,28 @@ impl warp::reject::Reject for BlobStoreError {}
 /// the primary identifier for the blob going forward. A blob effectively becomes
 /// immutable once the upload has been completed. Callers must either 'finalize'
 /// a blob upload, or cancel it.
+#[async_trait]
 pub trait BlobStore {
     type Writer: Write + Unpin + Send;
 
     /// Begin uploading a blob, returns the session_id as a Uuid. After calling,
     /// clients should now be able to call 'get_session'.
-    fn start_upload(&self) -> Pin<Box<dyn Future<Output = Result<Uuid, BlobStoreError>> + Send>>;
+    async fn start_upload(&self) -> Result<Uuid, BlobStoreError>;
 
     /// Retrieve the underlying session, and its associated writer, at the given
     /// byte offset position.
-    fn get_session(
+    async fn get_session(
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>> + Send>>;
+    ) -> Result<UploadSession<Self::Writer>, BlobStoreError>;
 
     /// Finalize the upload session, producing an immutable Digest that will
     /// be used as the blob identifier going forward.
-    fn finalize_upload(
-        &self,
-        session_id: &Uuid,
-    ) -> Pin<Box<dyn Future<Output = Result<Digest, BlobStoreError>> + Send>>;
+    async fn finalize_upload(&self, session_id: &Uuid) -> Result<Digest, BlobStoreError>;
 
     /// Cancel the upload, removing all temporary upload state.
-    fn cancel_upload(
-        &self,
-        session_id: &Uuid,
-    ) -> Pin<Box<dyn Future<Output = Result<(), BlobStoreError>> + Send>>;
+    async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError>;
 }
 
 pub struct UploadSession<W: Write + Unpin + Send> {
@@ -108,64 +104,50 @@ impl FsBlobStore {
     }
 }
 
+#[async_trait]
 impl BlobStore for FsBlobStore {
     type Writer = File;
 
-    fn start_upload(&self) -> Pin<Box<dyn Future<Output = Result<Uuid, BlobStoreError>> + Send>> {
+    async fn start_upload(&self) -> Result<Uuid, BlobStoreError> {
         let session_id = Uuid::new_v4();
-        Box::pin(
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(
-                    self.root_directory
-                        .join("sessions")
-                        .join(format!("{}", session_id.to_hyphenated_ref())),
-                )
-                .then(move |_| future::ok(session_id)),
-        )
+        let _ = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(
+                self.root_directory
+                    .join("sessions")
+                    .join(format!("{}", session_id.to_hyphenated_ref())),
+            )
+            .await?;
+        Ok(session_id)
     }
 
-    fn get_session(
+    async fn get_session(
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>> + Send>>
-    {
-        let session_cloned = session_id.clone();
-        Box::pin(
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(
-                    self.root_directory
-                        .join("sessions")
-                        .join(format!("{}", session_id.to_hyphenated_ref())),
-                )
-                .then(move |file| match file {
-                    Ok(f) => future::ok(UploadSession::new(f)),
-                    Err(e) => future::err(BlobStoreError::from(e)),
-                }),
-        )
+    ) -> Result<UploadSession<Self::Writer>, BlobStoreError> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(
+                self.root_directory
+                    .join("sessions")
+                    .join(format!("{}", session_id.to_hyphenated_ref())),
+            )
+            .await?;
+        file.seek(SeekFrom::Start(pos)).await?;
+        Ok(UploadSession::new(file))
     }
 
-    fn finalize_upload(
-        &self,
-        session_id: &Uuid,
-    ) -> Pin<Box<dyn Future<Output = Result<Digest, BlobStoreError>> + Send>> {
-        Box::pin(future::ok(Digest::new(
-            DigestAlgorithm::Sha256,
-            "deadbeef".to_string(),
-        )))
+    async fn finalize_upload(&self, _session_id: &Uuid) -> Result<Digest, BlobStoreError> {
+        Ok(Digest::new(DigestAlgorithm::Sha256, "deadbeef".to_string()))
     }
 
-    fn cancel_upload(
-        &self,
-        session_id: &Uuid,
-    ) -> Pin<Box<dyn Future<Output = Result<(), BlobStoreError>> + Send>> {
-        Box::pin(future::ok(()))
+    async fn cancel_upload(&self, _session_id: &Uuid) -> Result<(), BlobStoreError> {
+        Ok(())
     }
 }
 
