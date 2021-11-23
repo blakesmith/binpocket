@@ -1,12 +1,12 @@
 use async_std::{
-    fs::File,
+    fs::{File, OpenOptions},
     io::Error as AIOError,
     io::Write,
     task::{Context, Poll},
 };
 use bytes::Buf;
 use core::pin::Pin;
-use futures_util::{future, Future, Stream, StreamExt};
+use futures_util::{future, Future, FutureExt, Stream, StreamExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -33,8 +33,7 @@ pub trait BlobStore {
 
     /// Begin uploading a blob, returns the session_id as a Uuid. After calling,
     /// clients should now be able to call 'get_session'.
-    fn start_upload(&self)
-        -> Box<dyn Future<Output = Result<Uuid, BlobStoreError>> + Unpin + Send>;
+    fn start_upload(&self) -> Pin<Box<dyn Future<Output = Result<Uuid, BlobStoreError>> + Send>>;
 
     /// Retrieve the underlying session, and its associated writer, at the given
     /// byte offset position.
@@ -42,20 +41,20 @@ pub trait BlobStore {
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>> + Unpin + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>> + Send>>;
 
     /// Finalize the upload session, producing an immutable Digest that will
     /// be used as the blob identifier going forward.
     fn finalize_upload(
         &self,
         session_id: &Uuid,
-    ) -> Box<dyn Future<Output = Result<Digest, BlobStoreError>> + Unpin + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<Digest, BlobStoreError>> + Send>>;
 
     /// Cancel the upload, removing all temporary upload state.
     fn cancel_upload(
         &self,
         session_id: &Uuid,
-    ) -> Box<dyn Future<Output = Result<(), BlobStoreError>> + Unpin + Send>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), BlobStoreError>> + Send>>;
 }
 
 pub struct UploadSession<W: Write + Unpin> {
@@ -96,6 +95,8 @@ impl FsBlobStore {
     /// Open the filesystem blob store. Note: This is a blocking I/O call,
     /// since it's only run during startup.
     pub fn open(root_directory: PathBuf) -> Result<Self, std::io::Error> {
+        std::fs::create_dir_all(root_directory.join("sessions"))?;
+        std::fs::create_dir_all(root_directory.join("blobs"))?;
         Ok(Self { root_directory })
     }
 }
@@ -103,26 +104,35 @@ impl FsBlobStore {
 impl BlobStore for FsBlobStore {
     type Writer = File;
 
-    fn start_upload(
-        &self,
-    ) -> Box<dyn Future<Output = Result<Uuid, BlobStoreError>> + Unpin + Send> {
-        Box::new(future::ok(Uuid::new_v4()))
+    fn start_upload(&self) -> Pin<Box<dyn Future<Output = Result<Uuid, BlobStoreError>> + Send>> {
+        let session_id = Uuid::new_v4();
+        Box::pin(
+            OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(
+                    self.root_directory
+                        .join("sessions")
+                        .join(format!("{}", session_id.to_hyphenated_ref())),
+                )
+                .then(move |_| future::ok(session_id)),
+        )
     }
 
     fn get_session(
         &self,
         session_id: &Uuid,
         pos: u64,
-    ) -> Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>> + Unpin + Send>
+    ) -> Pin<Box<dyn Future<Output = Result<UploadSession<Self::Writer>, BlobStoreError>> + Send>>
     {
-        Box::new(future::err(BlobStoreError::Unknown))
+        Box::pin(future::err(BlobStoreError::Unknown))
     }
 
     fn finalize_upload(
         &self,
         session_id: &Uuid,
-    ) -> Box<dyn Future<Output = Result<Digest, BlobStoreError>> + Unpin + Send> {
-        Box::new(future::ok(Digest::new(
+    ) -> Pin<Box<dyn Future<Output = Result<Digest, BlobStoreError>> + Send>> {
+        Box::pin(future::ok(Digest::new(
             DigestAlgorithm::Sha256,
             "deadbeef".to_string(),
         )))
@@ -131,8 +141,8 @@ impl BlobStore for FsBlobStore {
     fn cancel_upload(
         &self,
         session_id: &Uuid,
-    ) -> Box<dyn Future<Output = Result<(), BlobStoreError>> + Unpin + Send> {
-        Box::new(future::ok(()))
+    ) -> Pin<Box<dyn Future<Output = Result<(), BlobStoreError>> + Send>> {
+        Box::pin(future::ok(()))
     }
 }
 

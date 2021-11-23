@@ -25,7 +25,7 @@ async fn main() {
         .init();
 
     let blob_store = Arc::new(
-        blob::FsBlobStore::open(PathBuf::from("/tmp/blobs")).expect("Could not open blob store"),
+        blob::FsBlobStore::open(PathBuf::from("/tmp/oci")).expect("Could not open blob store"),
     );
 
     let routes = blob::routes::<blob::FsBlobStore>().recover(error::handle_rejection);
