@@ -195,9 +195,12 @@ where
     BUF: Buf,
     S: Stream<Item = Result<BUF, warp::Error>> + Unpin,
 {
-    tracing::info!("Starting upload");
+    tracing::debug!(
+        "Starting upload, repository: {}, session_id: {}",
+        repository,
+        session_id
+    );
     let mut upload_session = blob_store.get_session(&session_id, 0).await?;
-    tracing::info!("Chunking");
     while let Some(buf) = byte_stream.next().await {
         match buf {
             Ok(b) => {
