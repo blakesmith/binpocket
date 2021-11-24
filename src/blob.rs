@@ -46,7 +46,7 @@ impl warp::reject::Reject for BlobStoreError {}
 /// they are finalized. At finalization time, a digest is computed, and used as
 /// the primary identifier for the blob going forward. A blob effectively becomes
 /// immutable once the upload has been completed. Callers must either 'finalize'
-/// a blob upload, or cancel it.
+/// a blob upload, or 'cancel' it to clean up temporary session upload state.
 #[async_trait]
 pub trait BlobStore {
     type Writer: Write + Unpin + Send;
@@ -56,7 +56,8 @@ pub trait BlobStore {
     async fn start_upload(&self) -> Result<Uuid, BlobStoreError>;
 
     /// Retrieve the underlying session, and its associated writer, at the given
-    /// byte offset position.
+    /// byte offset position. Clients must call 'start_upload' to create the upload
+    /// session before calling this function.
     async fn get_session(
         &self,
         session_id: &Uuid,
@@ -301,12 +302,16 @@ where
                 tracing::debug!("Got byte buffer, remaining: {}", b.remaining());
                 if let Err(e) = upload_session.write_all(b.chunk()).await {
                     tracing::error!("Failed to write upload session data: {:?}", e);
-                    return Ok(StatusCode::INTERNAL_SERVER_ERROR);
+                    return Ok(warp::http::response::Builder::new()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(""));
                 }
             }
             Err(e) => {
                 tracing::error!("Failed to get http buffer: {:?}", e);
-                return Ok(StatusCode::INTERNAL_SERVER_ERROR);
+                return Ok(warp::http::response::Builder::new()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(""));
             }
         }
     }
@@ -348,13 +353,21 @@ where
                 blob_store
                     .finalize_upload(&session_id, &computed_digest)
                     .await?;
-                Ok(StatusCode::CREATED)
+                let location = format!("/v2/{}/blobs/{}", &repository, &computed_digest);
+                Ok(warp::http::response::Builder::new()
+                    .header("Location", location)
+                    .status(StatusCode::CREATED)
+                    .body(""))
             }
         }
 
         // No digest was passed: This came from a PATCH chunk
-        // upload: We signal that we've accepted the chunk.
-        None => Ok(StatusCode::ACCEPTED),
+        // upload: We signal that we've accepted the chunk, and
+        // assume that the client will make a PUT call with the digest
+        // to finalize the upload.
+        None => Ok(warp::http::response::Builder::new()
+            .status(StatusCode::ACCEPTED)
+            .body("")),
     }
 }
 
