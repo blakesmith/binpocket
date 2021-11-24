@@ -1,5 +1,6 @@
 use async_lock::{Mutex, RwLock};
 use async_std::{
+    fs,
     fs::{File, OpenOptions},
     io::{prelude::SeekExt, Error as AIOError, SeekFrom, Write, WriteExt},
     task::{Context, Poll},
@@ -63,12 +64,14 @@ pub trait BlobStore {
     ) -> Result<Arc<Mutex<UploadSession<Self::Writer>>>, BlobStoreError>;
 
     /// Finalize the upload session, producing an immutable Digest that will
-    /// be used as the blob identifier going forward.
+    /// be used as the blob identifier going forward. Implementations can
+    /// remove any temporary state that's being held for upload sessions, and
+    /// transition the blob to stable, long-term, immutable storage.
     async fn finalize_upload(
         &self,
         session_id: &Uuid,
-        algorithm: DigestAlgorithm,
-    ) -> Result<digest::Digest, BlobStoreError>;
+        digest: &digest::Digest,
+    ) -> Result<(), BlobStoreError>;
 
     /// Cancel the upload, removing all temporary upload state.
     async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError>;
@@ -213,8 +216,8 @@ impl BlobStore for FsBlobStore {
     async fn finalize_upload(
         &self,
         session_id: &Uuid,
-        algorithm: DigestAlgorithm,
-    ) -> Result<digest::Digest, BlobStoreError> {
+        digest: &digest::Digest,
+    ) -> Result<(), BlobStoreError> {
         let session = self
             .sessions
             .write()
@@ -222,12 +225,22 @@ impl BlobStore for FsBlobStore {
             .remove(session_id)
             .ok_or(BlobStoreError::SessionNotFound(session_id.clone()))?;
 
-        // TODO: Move the session to blob storage!
+        // Drop the session, closing the underlying file handle.
+        drop(session);
 
-        let mut session_guard = session.lock().await;
-        session_guard
-            .finalize(algorithm)
-            .ok_or(BlobStoreError::UnsupportedDigest)
+        // Transition the upload session file to stable, immutable
+        // blob storage.
+        fs::rename(
+            self.root_directory
+                .join("sessions")
+                .join(format!("{}", session_id.to_hyphenated_ref())),
+            self.root_directory
+                .join("blobs")
+                .join(format!("{}", digest)),
+        )
+        .await?;
+
+        Ok(())
     }
 
     async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError> {
@@ -298,15 +311,10 @@ where
 
     match query_params.digest {
         Some(client_digest) => {
-            // Make sure we drop the lock, so we
-            // can finalize the session.
-
-            drop(upload_session);
-            let computed_digest = blob_store
-                .finalize_upload(&session_id, client_digest.algorithm.clone())
-                .await
-                .map_err(|e| {
-                    tracing::info!("Invalid digest: {:?}", e);
+            let computed_digest = upload_session
+                .finalize(client_digest.algorithm.clone())
+                .ok_or_else(|| {
+                    tracing::info!("Invalid digest");
                     ErrorResponse::new(
                         StatusCode::BAD_REQUEST,
                         ErrorCode::DigestInvalid,
@@ -324,6 +332,9 @@ where
                     ),
                 ))?
             } else {
+                blob_store
+                    .finalize_upload(&session_id, &computed_digest)
+                    .await?;
                 Ok(StatusCode::CREATED)
             }
         }
