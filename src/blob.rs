@@ -20,7 +20,7 @@ use warp::{http::StatusCode, Filter, Rejection, Reply};
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::{
     digest,
-    digest::{deserialize_digest_string, deserialize_optional_digest_string, DigestAlgorithm},
+    digest::{deserialize_optional_digest_string, DigestAlgorithm},
 };
 
 /// Errors return from Blob Store operations.
@@ -95,8 +95,8 @@ impl<W: Write + Unpin + Send> Write for UploadSession<W> {
         match Pin::new(&mut self.writer).poll_write(cx, buf) {
             Poll::Ready(Ok(bytes_written)) => {
                 self.bytes_written += bytes_written as u64;
-                self.sha256.update(buf);
-                self.sha512.update(buf);
+                self.sha256.update(&buf[0..bytes_written]);
+                self.sha512.update(&buf[0..bytes_written]);
                 Poll::Ready(Ok(bytes_written))
             }
             otherwise => otherwise,
