@@ -250,6 +250,15 @@ impl BlobStore for FsBlobStore {
             .await
             .remove(session_id)
             .ok_or(BlobStoreError::SessionNotFound(session_id.clone()))?;
+
+        // Remove temporary session storage
+        fs::remove_file(
+            self.root_directory
+                .join("sessions")
+                .join(format!("{}", session_id.to_hyphenated_ref())),
+        )
+        .await?;
+
         Ok(())
     }
 }
@@ -323,6 +332,7 @@ where
                 })?;
 
             if computed_digest != client_digest {
+                blob_store.cancel_upload(&session_id).await?;
                 Err(ErrorResponse::new(
                     StatusCode::BAD_REQUEST,
                     ErrorCode::DigestInvalid,
@@ -332,13 +342,19 @@ where
                     ),
                 ))?
             } else {
+                // Upload session is completely valid: Promote to
+                // blob storage, and signal to the client that the
+                // blob is created.
                 blob_store
                     .finalize_upload(&session_id, &computed_digest)
                     .await?;
                 Ok(StatusCode::CREATED)
             }
         }
-        None => Ok(StatusCode::CREATED),
+
+        // No digest was passed: This came from a PATCH chunk
+        // upload: We signal that we've accepted the chunk.
+        None => Ok(StatusCode::ACCEPTED),
     }
 }
 
