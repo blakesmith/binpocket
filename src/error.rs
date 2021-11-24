@@ -54,6 +54,11 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
             }),
             StatusCode::NOT_FOUND,
         ))
+    } else if let Some(err_resp) = err.find::<ErrorResponse>() {
+        Ok(warp::reply::with_status(
+            warp::reply::json(err_resp),
+            err_resp.http_code,
+        ))
     } else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
         tracing::debug!("Method not allowed: {:?}", err);
         Ok(warp::reply::with_status(
@@ -61,11 +66,6 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> 
                 message: "Method not allowed".to_string(),
             }),
             StatusCode::METHOD_NOT_ALLOWED,
-        ))
-    } else if let Some(err_resp) = err.find::<ErrorResponse>() {
-        Ok(warp::reply::with_status(
-            warp::reply::json(err_resp),
-            err_resp.http_code,
         ))
     } else {
         tracing::error!("Got unhandled error: {:?}", err);
