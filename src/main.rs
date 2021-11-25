@@ -2,6 +2,7 @@ mod blob;
 mod digest;
 mod error;
 mod manifest;
+mod range;
 
 use hyper::Server;
 use std::{
