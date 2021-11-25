@@ -274,6 +274,7 @@ pub fn routes<B: BlobStore + Send + Sync + 'static>(
 
 #[derive(Debug, Deserialize)]
 struct BlobPutQueryParams {
+    #[serde(default)]
     #[serde(deserialize_with = "deserialize_optional_digest_string")]
     digest: Option<digest::Digest>,
 }
