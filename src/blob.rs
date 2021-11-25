@@ -16,7 +16,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
-use warp::{http::StatusCode, Filter, Rejection, Reply};
+use warp::{
+    http::{Response, StatusCode},
+    Filter, Rejection, Reply,
+};
 
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::{
@@ -281,7 +284,7 @@ async fn receive_put_upload<B, S, BUF>(
     query_params: BlobPutQueryParams,
     blob_store: Arc<B>,
     mut byte_stream: S,
-) -> Result<impl Reply, Rejection>
+) -> Result<Response<&'static str>, Rejection>
 where
     B: BlobStore + Send + Sync + 'static,
     BUF: Buf,
@@ -304,14 +307,16 @@ where
                     tracing::error!("Failed to write upload session data: {:?}", e);
                     return Ok(warp::http::response::Builder::new()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(""));
+                        .body("")
+                        .unwrap());
                 }
             }
             Err(e) => {
                 tracing::error!("Failed to get http buffer: {:?}", e);
                 return Ok(warp::http::response::Builder::new()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(""));
+                    .body("")
+                    .unwrap());
             }
         }
     }
@@ -357,7 +362,8 @@ where
                 Ok(warp::http::response::Builder::new()
                     .header("Location", location)
                     .status(StatusCode::CREATED)
-                    .body(""))
+                    .body("")
+                    .unwrap())
             }
         }
 
@@ -367,7 +373,8 @@ where
         // to finalize the upload.
         None => Ok(warp::http::response::Builder::new()
             .status(StatusCode::ACCEPTED)
-            .body("")),
+            .body("")
+            .unwrap()),
     }
 }
 
@@ -381,30 +388,51 @@ fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
         .and_then(receive_put_upload)
 }
 
-async fn start_blob_upload<B>(
+async fn start_session_or_blob_upload<B, S, BUF>(
     repository: String,
+    query_params: BlobPutQueryParams,
     blob_store: Arc<B>,
-) -> Result<impl Reply, Rejection>
+    byte_stream: S,
+) -> Result<Response<&'static str>, Rejection>
 where
     B: BlobStore + Send + Sync + 'static,
+    BUF: Buf,
+    S: Stream<Item = Result<BUF, warp::Error>> + Unpin,
 {
     let session_id = blob_store.start_upload().await?;
-    let location = format!(
-        "/v2/{}/blobs/upload/{}",
-        repository,
-        session_id.to_hyphenated_ref()
-    );
+    match query_params.digest {
+        Some(ref _client_digest) => {
+            receive_put_upload(
+                repository,
+                session_id,
+                query_params,
+                blob_store,
+                byte_stream,
+            )
+            .await
+        }
+        None => {
+            let location = format!(
+                "/v2/{}/blobs/upload/{}",
+                repository,
+                session_id.to_hyphenated_ref()
+            );
 
-    Ok(warp::http::response::Builder::new()
-        .header("Location", location)
-        .status(202)
-        .body(format!("Start blob upload for: {}", repository)))
+            Ok(warp::http::response::Builder::new()
+                .header("Location", location)
+                .status(202)
+                .body("")
+                .unwrap())
+        }
+    }
 }
 
 fn blob_upload_start<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::post()
         .and(warp::path!("v2" / String / "blobs" / "uploads"))
+        .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
-        .and_then(start_blob_upload)
+        .and(warp::filters::body::stream())
+        .and_then(start_session_or_blob_upload)
 }
