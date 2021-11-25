@@ -1,10 +1,11 @@
 use serde::Deserialize;
 use std::convert::TryFrom;
+use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Deserialize)]
 pub struct ContentRange {
-    start: u64,
-    end: u64,
+    pub start: u64,
+    pub end: u64,
 }
 
 impl TryFrom<&str> for ContentRange {
@@ -26,6 +27,14 @@ impl TryFrom<&str> for ContentRange {
             .parse::<u64>()
             .map_err(|e| format!("Failed to parse start: {:?}", e))?;
         Ok(Self { start, end })
+    }
+}
+
+impl FromStr for ContentRange {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        TryFrom::try_from(s)
     }
 }
 
