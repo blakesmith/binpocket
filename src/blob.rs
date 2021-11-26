@@ -2,7 +2,7 @@ use async_lock::{Mutex, RwLock};
 use async_std::{
     fs,
     fs::{File, OpenOptions},
-    io::{prelude::SeekExt, Error as AIOError, SeekFrom, Write, WriteExt},
+    io::{prelude::SeekExt, Error as AIOError, ErrorKind, SeekFrom, Write, WriteExt},
     task::{Context, Poll},
 };
 use async_trait::async_trait;
@@ -13,6 +13,7 @@ use futures_util::{Stream, StreamExt};
 use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,6 +82,11 @@ pub trait BlobStore {
 
     /// Cancel the upload, removing all temporary upload state.
     async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError>;
+
+    /// Check if a blob exists. Clients will call this to verify
+    /// if the blob is already present before initiating a new
+    /// blob upload.
+    async fn blob_exists(&self, digest: &digest::Digest) -> Result<bool, BlobStoreError>;
 }
 
 /// Represents the state that needs to be tracked by the server
@@ -267,6 +273,20 @@ impl BlobStore for FsBlobStore {
         .await?;
 
         Ok(())
+    }
+
+    async fn blob_exists(&self, digest: &digest::Digest) -> Result<bool, BlobStoreError> {
+        match fs::metadata(
+            self.root_directory
+                .join("blobs")
+                .join(format!("{}", digest)),
+        )
+        .await
+        {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 
@@ -472,6 +492,46 @@ where
     }
 }
 
+async fn check_blob_exists<B: BlobStore + Send + Sync + 'static>(
+    _repository: String,
+    digest_raw: String,
+    blob_store: Arc<B>,
+) -> Result<Response<&'static str>, Rejection>
+where
+    B: BlobStore + Send + Sync + 'static,
+{
+    let digest = match digest::Digest::try_from(&digest_raw as &str) {
+        Ok(d) => d,
+        Err(_err) => {
+            return Ok(warp::http::response::Builder::new()
+                .status(StatusCode::BAD_REQUEST)
+                .body("")
+                .unwrap())
+        }
+    };
+
+    if blob_store.blob_exists(&digest).await? {
+        Ok(warp::http::response::Builder::new()
+            .header("Docker-Content-Digest", format!("{}", digest))
+            .status(StatusCode::OK)
+            .body("")
+            .unwrap())
+    } else {
+        Ok(warp::http::response::Builder::new()
+            .status(StatusCode::NOT_FOUND)
+            .body("")
+            .unwrap())
+    }
+}
+
+fn blob_exists<B: BlobStore + Send + Sync + 'static>(
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::head()
+        .and(warp::path!("v2" / String / "blobs" / String))
+        .and(warp::filters::ext::get::<Arc<B>>())
+        .and_then(check_blob_exists)
+}
+
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
@@ -504,7 +564,8 @@ fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
 
 pub fn routes<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    blob_upload_post::<B>()
+    blob_exists::<B>()
+        .or(blob_upload_post::<B>())
         .or(blob_upload_put::<B>())
         .or(blob_upload_patch::<B>())
 }

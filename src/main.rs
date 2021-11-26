@@ -17,7 +17,11 @@ use tower_http::{
     trace::{DefaultOnResponse, TraceLayer},
 };
 use tracing::metadata::Level;
-use warp::Filter;
+use warp::{http::StatusCode, Filter, Rejection, Reply};
+
+fn oci_root_v2() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::get().and(warp::path!("v2")).map(|| StatusCode::OK)
+}
 
 #[tokio::main]
 async fn main() {
@@ -29,7 +33,9 @@ async fn main() {
         blob::FsBlobStore::open(PathBuf::from("/tmp/oci")).expect("Could not open blob store"),
     );
 
-    let routes = blob::routes::<blob::FsBlobStore>().recover(error::handle_rejection);
+    let routes = oci_root_v2()
+        .or(blob::routes::<blob::FsBlobStore>())
+        .recover(error::handle_rejection);
     let warp_service = warp::service(routes);
 
     let service = ServiceBuilder::new()
