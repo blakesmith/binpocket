@@ -86,7 +86,7 @@ pub trait BlobStore {
     /// Check if a blob exists. Clients will call this to verify
     /// if the blob is already present before initiating a new
     /// blob upload.
-    async fn blob_exists(&self, digest: &digest::Digest) -> Result<bool, BlobStoreError>;
+    async fn blob_exists(&self, digest: &digest::Digest) -> Result<u64, BlobStoreError>;
 }
 
 /// Represents the state that needs to be tracked by the server
@@ -275,7 +275,7 @@ impl BlobStore for FsBlobStore {
         Ok(())
     }
 
-    async fn blob_exists(&self, digest: &digest::Digest) -> Result<bool, BlobStoreError> {
+    async fn blob_exists(&self, digest: &digest::Digest) -> Result<u64, BlobStoreError> {
         match fs::metadata(
             self.root_directory
                 .join("blobs")
@@ -283,8 +283,8 @@ impl BlobStore for FsBlobStore {
         )
         .await
         {
-            Ok(_) => Ok(true),
-            Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+            Ok(metadata) => Ok(metadata.len()),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(0),
             Err(err) => Err(err.into()),
         }
     }
@@ -316,7 +316,10 @@ where
         session_id
     );
     let session = blob_store
-        .get_session(&session_id, content_range.map(|c| c.start).unwrap_or(0))
+        .get_session(
+            &session_id,
+            content_range.as_ref().map(|c| c.start).unwrap_or(0),
+        )
         .await?;
 
     // Hold the upload session lock for the duration of the upload
@@ -399,10 +402,22 @@ where
         // upload: We signal that we've accepted the chunk, and
         // assume that the client will make a PUT call with the digest
         // to finalize the upload.
-        None => Ok(warp::http::response::Builder::new()
-            .status(StatusCode::ACCEPTED)
-            .body("")
-            .unwrap()),
+        None => {
+            let range = format!("0-{}", upload_session.bytes_written - 1);
+            Ok(warp::http::response::Builder::new()
+                .header(
+                    "Location",
+                    format!("/v2/{}/blobs/uploads/{}", &repository, &session_id),
+                )
+                .header(
+                    "Docker-Upload-UUID",
+                    session_id.to_hyphenated_ref().to_string(),
+                )
+                .header("Range", range)
+                .status(StatusCode::ACCEPTED)
+                .body("")
+                .unwrap())
+        }
     }
 }
 
@@ -432,7 +447,7 @@ where
 async fn receive_patch_upload<B, S, BUF>(
     repository: String,
     session_id: Uuid,
-    content_range: ContentRange,
+    content_range: Option<ContentRange>,
     blob_store: Arc<B>,
     byte_stream: S,
 ) -> Result<Response<&'static str>, Rejection>
@@ -445,7 +460,7 @@ where
         repository,
         session_id,
         BlobPutQueryParams { digest: None },
-        Some(content_range),
+        content_range,
         blob_store,
         byte_stream,
     )
@@ -510,9 +525,11 @@ where
         }
     };
 
-    if blob_store.blob_exists(&digest).await? {
+    let size = blob_store.blob_exists(&digest).await?;
+    if size > 0 {
         Ok(warp::http::response::Builder::new()
             .header("Docker-Content-Digest", format!("{}", digest))
+            .header("Content-Length", size)
             .status(StatusCode::OK)
             .body("")
             .unwrap())
@@ -556,7 +573,7 @@ fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::patch()
         .and(warp::path!("v2" / String / "blobs" / "uploads" / Uuid))
-        .and(warp::header::<ContentRange>("Content-Range"))
+        .and(warp::header::optional::<ContentRange>("Content-Range"))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
         .and_then(receive_patch_upload)

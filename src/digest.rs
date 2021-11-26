@@ -6,8 +6,8 @@ pub fn deserialize_digest_string<'de, D>(deserializer: D) -> Result<Digest, D::E
 where
     D: serde::de::Deserializer<'de>,
 {
-    let value: &str = serde::de::Deserialize::deserialize(deserializer)?;
-    Digest::try_from(value).map_err(serde::de::Error::custom)
+    let value: String = serde::de::Deserialize::deserialize(deserializer)?;
+    Digest::try_from(&value as &str).map_err(serde::de::Error::custom)
 }
 
 pub fn deserialize_optional_digest_string<'de, D>(
@@ -16,9 +16,11 @@ pub fn deserialize_optional_digest_string<'de, D>(
 where
     D: serde::de::Deserializer<'de>,
 {
-    let value: Option<&str> = serde::de::Deserialize::deserialize(deserializer)?;
+    let value: Option<String> = serde::de::Deserialize::deserialize(deserializer)?;
     match value {
-        Some(v) => Ok(Some(Digest::try_from(v).map_err(serde::de::Error::custom)?)),
+        Some(v) => Ok(Some(
+            Digest::try_from(&v as &str).map_err(serde::de::Error::custom)?,
+        )),
         None => Ok(None),
     }
 }
