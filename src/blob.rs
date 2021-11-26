@@ -13,6 +13,7 @@ use futures_util::{Stream, StreamExt};
 use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -53,7 +54,7 @@ impl warp::reject::Reject for BlobStoreError {}
 /// a blob upload, or 'cancel' it to clean up temporary session upload state.
 #[async_trait]
 pub trait BlobStore {
-    type Writer: Write + Unpin + Send;
+    type Writer: Write + Unpin + Send + Debug;
 
     /// Begin uploading a blob, returns the session_id as a Uuid. After calling,
     /// clients should now be able to call 'get_session'.
@@ -86,7 +87,8 @@ pub trait BlobStore {
 /// during upload. Since this holds open writers, it must be actively
 /// cleaned up from the outstanding upload sessions that the server
 /// is tracking once an upload is completed or aborted.
-pub struct UploadSession<W: Write + Unpin + Send> {
+#[derive(Debug)]
+pub struct UploadSession<W: Write + Unpin + Send + Debug> {
     id: Uuid,
     writer: W,
     bytes_written: u64,
@@ -94,7 +96,7 @@ pub struct UploadSession<W: Write + Unpin + Send> {
     sha512: Sha512,
 }
 
-impl<W: Write + Unpin + Send> Write for UploadSession<W> {
+impl<W: Write + Unpin + Send + Debug> Write for UploadSession<W> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -120,7 +122,7 @@ impl<W: Write + Unpin + Send> Write for UploadSession<W> {
     }
 }
 
-impl<W: Write + Unpin + Send> UploadSession<W> {
+impl<W: Write + Unpin + Send + Debug> UploadSession<W> {
     fn new(writer: W, id: Uuid) -> Self {
         Self {
             id,
@@ -320,6 +322,12 @@ where
             }
         }
     }
+
+    if let Err(e) = upload_session.flush().await {
+        tracing::error!("Failed to flush upload session: {:?}", e);
+    }
+
+    tracing::debug!("Upload complete. Session: {:?}", upload_session);
 
     // Upload is completed. Time to validate:
     //
