@@ -5,6 +5,7 @@ mod manifest;
 mod range;
 
 use hyper::Server;
+use manifest::LmdbManifestStore;
 use std::{
     net::{SocketAddr, TcpListener},
     path::PathBuf,
@@ -32,6 +33,13 @@ async fn main() {
     let blob_store = Arc::new(
         blob::FsBlobStore::open(PathBuf::from("/tmp/oci")).expect("Could not open blob store"),
     );
+
+    let env = lmdb::Environment::new()
+        .set_max_dbs(5)
+        .open(&PathBuf::from("/tmp/lmdb_data"))
+        .expect("Could not open LMDB database");
+    let _manifest_store =
+        LmdbManifestStore::open(Arc::new(env)).expect("Could not open manifest LMDB database");
 
     let routes = oci_root_v2()
         .or(blob::routes::<blob::FsBlobStore>())

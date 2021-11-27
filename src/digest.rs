@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use std::convert::TryFrom;
 
 /// Parse digests in the form of 'algorithm:encoded' into a real
@@ -55,6 +56,11 @@ pub struct Digest {
 impl Digest {
     pub fn new(algorithm: DigestAlgorithm, encoded: String) -> Self {
         Digest { algorithm, encoded }
+    }
+
+    pub fn get_bytes(&self) -> Bytes {
+        let display = format!("{}", self);
+        Bytes::copy_from_slice(display.as_bytes())
     }
 }
 
