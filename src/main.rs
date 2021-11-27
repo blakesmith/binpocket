@@ -35,6 +35,7 @@ async fn main() {
 
     let routes = oci_root_v2()
         .or(blob::routes::<blob::FsBlobStore>())
+        .or(manifest::routes())
         .recover(error::handle_rejection);
     let warp_service = warp::service(routes);
 
