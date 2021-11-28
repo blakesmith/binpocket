@@ -12,7 +12,7 @@ use warp::{
 
 use crate::{digest, digest::deserialize_digest_string};
 
-mod manifest_proto {
+pub mod protos {
     include!(concat!(env!("OUT_DIR"), "/binpocket.manifest.rs"));
 }
 
@@ -158,18 +158,18 @@ impl ManifestStore for LmdbManifestStore {
 
         tokio::task::spawn_blocking(move || {
             let mut tx = env.begin_rw_txn()?;
-            let new_tag = manifest_proto::TagReference {
+            let new_tag = protos::TagReference {
                 tag_name: reference_cloned,
                 manifest_digest: digest_str,
             };
 
             let repo_tags = match tx.get(db, &key) {
                 Ok(b) => {
-                    let mut existing = manifest_proto::RepositoryTags::decode(b)?;
+                    let mut existing = protos::RepositoryTags::decode(b)?;
                     existing.tag_references.push(new_tag);
                     Ok(existing)
                 }
-                Err(lmdb::Error::NotFound) => Ok(manifest_proto::RepositoryTags {
+                Err(lmdb::Error::NotFound) => Ok(protos::RepositoryTags {
                     repository: repository_cloned,
                     tag_references: vec![new_tag],
                 }),
