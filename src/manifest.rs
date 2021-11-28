@@ -118,8 +118,8 @@ impl ManifestStore for LmdbManifestStore {
         let digest_bytes = digest.get_bytes();
         tokio::task::spawn_blocking(move || {
             let mut tx = env.begin_rw_txn()?;
-            tx.put(db, &digest_bytes, &json_payload, lmdb::WriteFlags::empty())
-                .map_err(|err| err.into())
+            tx.put(db, &digest_bytes, &json_payload, lmdb::WriteFlags::empty())?;
+            tx.commit().map_err(|err| err.into())
         })
         .await?
     }
@@ -178,8 +178,8 @@ impl ManifestStore for LmdbManifestStore {
 
             let mut value = bytes::BytesMut::new();
             repo_tags.encode(&mut value)?;
-            tx.put(db, &key, &value, lmdb::WriteFlags::empty())
-                .map_err(|err| err.into())
+            tx.put(db, &key, &value, lmdb::WriteFlags::empty())?;
+            tx.commit().map_err(|err| err.into())
         })
         .await?
     }
