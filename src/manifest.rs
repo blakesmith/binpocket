@@ -38,6 +38,8 @@ pub enum ManifestStoreError {
     Lmdb(lmdb::Error),
 }
 
+impl warp::reject::Reject for ManifestStoreError {}
+
 impl From<lmdb::Error> for ManifestStoreError {
     fn from(err: lmdb::Error) -> Self {
         ManifestStoreError::Lmdb(err)
@@ -54,18 +56,16 @@ impl From<tokio::task::JoinError> for ManifestStoreError {
 /// their content addressable digest.
 #[async_trait]
 pub trait ManifestStore {
-    type ByteRef: AsRef<[u8]>;
-
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
-        json_payload: Self::ByteRef,
+        json_payload: bytes::Bytes,
     ) -> Result<(), ManifestStoreError>;
 
     async fn get_manifest(
         &self,
         digest: &digest::Digest,
-    ) -> Result<Self::ByteRef, ManifestStoreError>;
+    ) -> Result<bytes::Bytes, ManifestStoreError>;
 }
 
 pub struct LmdbManifestStore {
@@ -82,12 +82,10 @@ impl LmdbManifestStore {
 
 #[async_trait]
 impl ManifestStore for LmdbManifestStore {
-    type ByteRef = bytes::Bytes;
-
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
-        json_payload: Self::ByteRef,
+        json_payload: bytes::Bytes,
     ) -> Result<(), ManifestStoreError> {
         let env = self.env.clone();
         let db = self.db.clone();
@@ -103,7 +101,7 @@ impl ManifestStore for LmdbManifestStore {
     async fn get_manifest(
         &self,
         digest: &digest::Digest,
-    ) -> Result<Self::ByteRef, ManifestStoreError> {
+    ) -> Result<bytes::Bytes, ManifestStoreError> {
         let env = self.env.clone();
         let db = self.db.clone();
         let digest_bytes = digest.get_bytes();
@@ -120,21 +118,24 @@ impl ManifestStore for LmdbManifestStore {
     }
 }
 
-async fn process_manifest_put(
+async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
     repository: String,
     reference: String,
+    manifest_store: Arc<M>,
     body: bytes::Bytes,
 ) -> Result<Response<&'static str>, Rejection> {
     let location = format!("/v2/{}/manifests/{}", &repository, &reference);
 
     // Calculate the manifest digest.
     let mut sha256 = Sha256::new();
-    sha256.update(body);
+    sha256.update(&body);
     let digest = digest::Digest::new(
         digest::DigestAlgorithm::Sha256,
         format!("{:x}", sha256.finalize()),
     );
-    // TODO: Actually store the manifest
+    // TODO: Validate the manifest content before storing
+    // it.
+    manifest_store.store_manifest(&digest, body).await?;
 
     Ok(warp::http::response::Builder::new()
         .status(StatusCode::CREATED)
@@ -144,13 +145,16 @@ async fn process_manifest_put(
         .unwrap())
 }
 
-fn manifest_put() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
         .and(warp::path!("v2" / String / "manifests" / String))
+        .and(warp::filters::ext::get::<Arc<M>>())
         .and(warp::body::bytes())
         .and_then(process_manifest_put)
 }
 
-pub fn routes() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    manifest_put()
+pub fn routes<M: ManifestStore + Send + Sync + 'static>(
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    manifest_put::<M>()
 }

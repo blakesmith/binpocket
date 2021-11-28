@@ -34,16 +34,18 @@ async fn main() {
         blob::FsBlobStore::open(PathBuf::from("/tmp/oci")).expect("Could not open blob store"),
     );
 
-    let env = lmdb::Environment::new()
-        .set_max_dbs(5)
-        .open(&PathBuf::from("/tmp/lmdb_data"))
-        .expect("Could not open LMDB database");
-    let _manifest_store =
-        LmdbManifestStore::open(Arc::new(env)).expect("Could not open manifest LMDB database");
+    let env = Arc::new(
+        lmdb::Environment::new()
+            .set_max_dbs(5)
+            .open(&PathBuf::from("/tmp/lmdb_data"))
+            .expect("Could not open LMDB database"),
+    );
+    let manifest_store =
+        Arc::new(LmdbManifestStore::open(env).expect("Could not open manifest LMDB database"));
 
     let routes = oci_root_v2()
         .or(blob::routes::<blob::FsBlobStore>())
-        .or(manifest::routes())
+        .or(manifest::routes::<manifest::LmdbManifestStore>())
         .recover(error::handle_rejection);
     let warp_service = warp::service(routes);
 
@@ -51,6 +53,7 @@ async fn main() {
         .layer(TraceLayer::new_for_http().on_response(DefaultOnResponse::new().level(Level::INFO)))
         .layer(CompressionLayer::new())
         .layer(AddExtensionLayer::new(blob_store))
+        .layer(AddExtensionLayer::new(manifest_store))
         .service(warp_service);
     let addr = SocketAddr::from(([0, 0, 0, 0], 3030));
     let listener = TcpListener::bind(addr).unwrap();
