@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bytes::Bytes;
+use flatbuffers::{FlatBufferBuilder, Follow, Push};
 use lmdb::Transaction;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -9,6 +10,7 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
+use crate::manifest_generated::manifest_fbs::{RepositoryTags, RepositoryTagsBuilder};
 use crate::{digest, digest::deserialize_digest_string};
 
 #[derive(Deserialize)]
@@ -66,6 +68,13 @@ pub trait ManifestStore {
         &self,
         digest: &digest::Digest,
     ) -> Result<bytes::Bytes, ManifestStoreError>;
+
+    async fn tag_manifest(
+        &self,
+        repository: &str,
+        reference: &str,
+        manifest_digest: &digest::Digest,
+    ) -> Result<(), ManifestStoreError>;
 }
 
 pub struct LmdbManifestStore {
@@ -116,6 +125,32 @@ impl ManifestStore for LmdbManifestStore {
         })
         .await?
     }
+
+    async fn tag_manifest(
+        &self,
+        repository: &str,
+        reference: &str,
+        manifest_digest: &digest::Digest,
+    ) -> Result<(), ManifestStoreError> {
+        let env = self.env.clone();
+        let db = self.db.clone();
+        let digest_str = format!("{}", manifest_digest);
+        let key = format!("{}_tags", repository);
+        let mut fbb = FlatBufferBuilder::new();
+        tokio::task::spawn_blocking(move || {
+            let mut tx = env.begin_rw_txn()?;
+            let builder = match tx.get(db, &key) {
+                // TODO: Replace with a mutation
+                Ok(b) => Ok(RepositoryTagsBuilder::new(&mut fbb)),
+                Err(lmdb::Error::NotFound) => Ok(RepositoryTagsBuilder::new(&mut fbb)),
+                Err(err) => Err(ManifestStoreError::from(err)),
+            }?;
+            builder.finish();
+            tx.put(db, &key, &fbb.finished_data(), lmdb::WriteFlags::empty())
+                .map_err(|err| err.into())
+        })
+        .await?
+    }
 }
 
 async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
@@ -136,6 +171,9 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
     // TODO: Validate the manifest content before storing
     // it.
     manifest_store.store_manifest(&digest, body).await?;
+    manifest_store
+        .tag_manifest(&repository, &reference, &digest)
+        .await?;
 
     Ok(warp::http::response::Builder::new()
         .status(StatusCode::CREATED)
