@@ -34,12 +34,19 @@ struct ImageManifest {
 #[derive(Debug)]
 pub enum ManifestStoreError {
     NotFound,
+    JoinError(tokio::task::JoinError),
     Lmdb(lmdb::Error),
 }
 
 impl From<lmdb::Error> for ManifestStoreError {
     fn from(err: lmdb::Error) -> Self {
         ManifestStoreError::Lmdb(err)
+    }
+}
+
+impl From<tokio::task::JoinError> for ManifestStoreError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        ManifestStoreError::JoinError(err)
     }
 }
 
@@ -82,27 +89,34 @@ impl ManifestStore for LmdbManifestStore {
         digest: &digest::Digest,
         json_payload: Self::ByteRef,
     ) -> Result<(), ManifestStoreError> {
-        let mut tx = self.env.begin_rw_txn()?;
-        tx.put(
-            self.db,
-            &digest.get_bytes(),
-            &json_payload,
-            lmdb::WriteFlags::empty(),
-        )
-        .map_err(|err| err.into())
+        let env = self.env.clone();
+        let db = self.db.clone();
+        let digest_bytes = digest.get_bytes();
+        tokio::task::spawn_blocking(move || {
+            let mut tx = env.begin_rw_txn()?;
+            tx.put(db, &digest_bytes, &json_payload, lmdb::WriteFlags::empty())
+                .map_err(|err| err.into())
+        })
+        .await?
     }
 
     async fn get_manifest(
         &self,
         digest: &digest::Digest,
     ) -> Result<Self::ByteRef, ManifestStoreError> {
-        let tx = self.env.begin_ro_txn()?;
-        let buf = match tx.get(self.db, &digest.get_bytes()) {
-            Ok(b) => Ok(b),
-            Err(lmdb::Error::NotFound) => Err(ManifestStoreError::NotFound),
-            Err(err) => Err(err.into()),
-        }?;
-        Ok(Bytes::copy_from_slice(buf))
+        let env = self.env.clone();
+        let db = self.db.clone();
+        let digest_bytes = digest.get_bytes();
+        tokio::task::spawn_blocking(move || {
+            let tx = env.begin_ro_txn()?;
+            let buf = match tx.get(db, &digest_bytes) {
+                Ok(b) => Ok(b),
+                Err(lmdb::Error::NotFound) => Err(ManifestStoreError::NotFound),
+                Err(err) => Err(err.into()),
+            }?;
+            Ok(Bytes::copy_from_slice(buf))
+        })
+        .await?
     }
 }
 
