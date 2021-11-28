@@ -203,6 +203,7 @@ dependencies = [
  "async-std",
  "async-trait",
  "bytes",
+ "flatbuffers",
  "futures-util",
  "hyper",
  "lmdb-rkv",
@@ -420,6 +421,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b394ed3d285a429378d3b384b9eb1285267e7df4b166df24b7a6939a04dc392e"
 dependencies = [
  "instant",
+]
+
+[[package]]
+name = "flatbuffers"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef4c5738bcd7fad10315029c50026f83c9da5e4a21f8ed66826f43e0e2bde5f6"
+dependencies = [
+ "bitflags",
+ "smallvec",
+ "thiserror",
 ]
 
 [[package]]

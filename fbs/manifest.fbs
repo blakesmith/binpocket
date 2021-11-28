@@ -1,0 +1,25 @@
+namespace manifest_fbs;
+
+// Tags for a given repository. Points
+// to a list of 'tag references' that
+// reference manifest content addresses.
+//
+// For example:
+// 'latest' might point to a manifest with 'sha256:123...'
+// 'v1.23' might also point to the same manifest, or a different one.
+//
+table RepositoryTags {
+    // The name of the repository.
+    repository: string (required);
+
+    // Tags -> Manifest mapping.
+    tag_references: [TagReference];
+}
+
+table TagReference {
+    // The name of the repository tag. EG - 'latest', or 'v1.234'
+    tag_name: string (required);
+
+    // The content addressable digest of the manifest.
+    manifest_digest: string (required);
+}
