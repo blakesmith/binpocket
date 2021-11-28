@@ -37,6 +37,7 @@ pub enum BlobStoreError {
     AIO(async_std::io::Error),
     SessionNotFound(Uuid),
     UnsupportedDigest,
+    NotFound,
     Unknown,
 }
 
@@ -47,6 +48,13 @@ impl From<AIOError> for BlobStoreError {
 }
 
 impl warp::reject::Reject for BlobStoreError {}
+
+/// Metadata about a stored blob. Retrieved
+/// by clients to validate the existence of
+/// a blob.
+pub struct BlobMetadata {
+    byte_size: u64,
+}
 
 /// Used to store blobs. Blobs are keyed by an upload session identifier, until
 /// they are finalized. At finalization time, a digest is computed, and used as
@@ -83,10 +91,10 @@ pub trait BlobStore {
     /// Cancel the upload, removing all temporary upload state.
     async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError>;
 
-    /// Check if a blob exists. Clients will call this to verify
-    /// if the blob is already present before initiating a new
-    /// blob upload.
-    async fn blob_exists(&self, digest: &digest::Digest) -> Result<u64, BlobStoreError>;
+    /// Fetch the blob's metadata, if it exists. This is mainly
+    /// used to check if the blob already exists in the store, and
+    /// to retrieve the blob content byte size.
+    async fn blob_metadata(&self, digest: &digest::Digest) -> Result<BlobMetadata, BlobStoreError>;
 }
 
 /// Represents the state that needs to be tracked by the server
@@ -275,7 +283,7 @@ impl BlobStore for FsBlobStore {
         Ok(())
     }
 
-    async fn blob_exists(&self, digest: &digest::Digest) -> Result<u64, BlobStoreError> {
+    async fn blob_metadata(&self, digest: &digest::Digest) -> Result<BlobMetadata, BlobStoreError> {
         match fs::metadata(
             self.root_directory
                 .join("blobs")
@@ -283,8 +291,10 @@ impl BlobStore for FsBlobStore {
         )
         .await
         {
-            Ok(metadata) => Ok(metadata.len()),
-            Err(err) if err.kind() == ErrorKind::NotFound => Ok(0),
+            Ok(metadata) => Ok(BlobMetadata {
+                byte_size: metadata.len(),
+            }),
+            Err(err) if err.kind() == ErrorKind::NotFound => Err(BlobStoreError::NotFound),
             Err(err) => Err(err.into()),
         }
     }
@@ -525,19 +535,18 @@ where
         }
     };
 
-    let size = blob_store.blob_exists(&digest).await?;
-    if size > 0 {
-        Ok(warp::http::response::Builder::new()
+    match blob_store.blob_metadata(&digest).await {
+        Ok(metadata) => Ok(warp::http::response::Builder::new()
             .header("Docker-Content-Digest", format!("{}", digest))
-            .header("Content-Length", size)
+            .header("Content-Length", metadata.byte_size)
             .status(StatusCode::OK)
             .body("")
-            .unwrap())
-    } else {
-        Ok(warp::http::response::Builder::new()
+            .unwrap()),
+        Err(BlobStoreError::NotFound) => Ok(warp::http::response::Builder::new()
             .status(StatusCode::NOT_FOUND)
             .body("")
-            .unwrap())
+            .unwrap()),
+        Err(err) => Err(err)?,
     }
 }
 
