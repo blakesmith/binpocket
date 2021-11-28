@@ -1,4 +1,6 @@
-namespace manifest_fbs;
+syntax = "proto3";
+
+package binpocket.manifest;
 
 // Tags for a given repository. Points
 // to a list of 'tag references' that
@@ -8,18 +10,19 @@ namespace manifest_fbs;
 // 'latest' might point to a manifest with 'sha256:123...'
 // 'v1.23' might also point to the same manifest, or a different one.
 //
-table RepositoryTags {
+message RepositoryTags {
     // The name of the repository.
-    repository: string (required);
+    string repository = 1;
 
     // Tags -> Manifest mapping.
-    tag_references: [TagReference];
+    repeated TagReference tag_references = 2;
 }
 
-table TagReference {
+message TagReference {
     // The name of the repository tag. EG - 'latest', or 'v1.234'
-    tag_name: string (required);
+    string tag_name = 1;
 
     // The content addressable digest of the manifest.
-    manifest_digest: string (required);
+    string manifest_digest = 2;
 }
+

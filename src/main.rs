@@ -2,8 +2,6 @@ mod blob;
 mod digest;
 mod error;
 mod manifest;
-#[allow(unused_imports)]
-mod manifest_generated;
 mod range;
 
 use hyper::Server;

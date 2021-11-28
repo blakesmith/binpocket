@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use flatbuffers::{FlatBufferBuilder, Follow, Push};
 use lmdb::Transaction;
+use prost::Message;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -10,8 +10,11 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
-use crate::manifest_generated::manifest_fbs::{RepositoryTags, RepositoryTagsBuilder};
 use crate::{digest, digest::deserialize_digest_string};
+
+mod manifest_proto {
+    include!(concat!(env!("OUT_DIR"), "/binpocket.manifest.rs"));
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +38,8 @@ struct ImageManifest {
 
 #[derive(Debug)]
 pub enum ManifestStoreError {
+    ProstEncode(prost::EncodeError),
+    ProstDecode(prost::DecodeError),
     NotFound,
     JoinError(tokio::task::JoinError),
     Lmdb(lmdb::Error),
@@ -51,6 +56,18 @@ impl From<lmdb::Error> for ManifestStoreError {
 impl From<tokio::task::JoinError> for ManifestStoreError {
     fn from(err: tokio::task::JoinError) -> Self {
         ManifestStoreError::JoinError(err)
+    }
+}
+
+impl From<prost::EncodeError> for ManifestStoreError {
+    fn from(err: prost::EncodeError) -> Self {
+        ManifestStoreError::ProstEncode(err)
+    }
+}
+
+impl From<prost::DecodeError> for ManifestStoreError {
+    fn from(err: prost::DecodeError) -> Self {
+        ManifestStoreError::ProstDecode(err)
     }
 }
 
@@ -135,18 +152,33 @@ impl ManifestStore for LmdbManifestStore {
         let env = self.env.clone();
         let db = self.db.clone();
         let digest_str = format!("{}", manifest_digest);
+        let repository_cloned = repository.to_string();
+        let reference_cloned = reference.to_string();
         let key = format!("{}_tags", repository);
-        let mut fbb = FlatBufferBuilder::new();
+
         tokio::task::spawn_blocking(move || {
             let mut tx = env.begin_rw_txn()?;
-            let builder = match tx.get(db, &key) {
-                // TODO: Replace with a mutation
-                Ok(b) => Ok(RepositoryTagsBuilder::new(&mut fbb)),
-                Err(lmdb::Error::NotFound) => Ok(RepositoryTagsBuilder::new(&mut fbb)),
+            let new_tag = manifest_proto::TagReference {
+                tag_name: reference_cloned,
+                manifest_digest: digest_str,
+            };
+
+            let repo_tags = match tx.get(db, &key) {
+                Ok(b) => {
+                    let mut existing = manifest_proto::RepositoryTags::decode(b)?;
+                    existing.tag_references.push(new_tag);
+                    Ok(existing)
+                }
+                Err(lmdb::Error::NotFound) => Ok(manifest_proto::RepositoryTags {
+                    repository: repository_cloned,
+                    tag_references: vec![new_tag],
+                }),
                 Err(err) => Err(ManifestStoreError::from(err)),
             }?;
-            builder.finish();
-            tx.put(db, &key, &fbb.finished_data(), lmdb::WriteFlags::empty())
+
+            let mut value = bytes::BytesMut::new();
+            repo_tags.encode(&mut value)?;
+            tx.put(db, &key, &value, lmdb::WriteFlags::empty())
                 .map_err(|err| err.into())
         })
         .await?
