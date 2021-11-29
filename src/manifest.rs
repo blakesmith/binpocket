@@ -225,6 +225,23 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
         .unwrap())
 }
 
+async fn process_manifest_get_or_head<M, E>(
+    _either: E, // Dumb that we need this, because of our 'head' or 'get' filter
+    method: warp::http::Method,
+    repository: String,
+    reference: String,
+    manifest_store: Arc<M>,
+) -> Result<Response<&'static str>, Rejection>
+where
+    M: ManifestStore + Send + Sync + 'static,
+    E: Sized,
+{
+    Ok(warp::http::response::Builder::new()
+        .status(StatusCode::OK)
+        .body("")
+        .unwrap())
+}
+
 fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
@@ -241,12 +258,7 @@ fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
         .and(warp::method())
         .and(warp::path!("v2" / String / "manifests" / String))
         .and(warp::filters::ext::get::<Arc<M>>())
-        .map(|_, method, repo, reference, _manifest_store| {
-            format!(
-                "Got manifest {} request for repo {}, reference: {}",
-                method, repo, reference
-            )
-        })
+        .and_then(process_manifest_get_or_head)
 }
 
 pub fn routes<M: ManifestStore + Send + Sync + 'static>(
