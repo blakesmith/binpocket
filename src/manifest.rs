@@ -3,12 +3,14 @@ use lmdb::Transaction;
 use prost::Message;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::convert::TryFrom;
 use std::sync::Arc;
 use warp::{
-    http::{Response, StatusCode},
+    http::{Method, Response, StatusCode},
     Filter, Rejection, Reply,
 };
 
+use crate::error::{ErrorCode, ErrorResponse};
 use crate::{digest, digest::deserialize_digest_string};
 
 pub mod protos {
@@ -48,7 +50,10 @@ impl warp::reject::Reject for ManifestStoreError {}
 
 impl From<lmdb::Error> for ManifestStoreError {
     fn from(err: lmdb::Error) -> Self {
-        ManifestStoreError::Lmdb(err)
+        match err {
+            lmdb::Error::NotFound => ManifestStoreError::NotFound,
+            err => ManifestStoreError::Lmdb(err),
+        }
     }
 }
 
@@ -74,6 +79,9 @@ impl From<prost::DecodeError> for ManifestStoreError {
 /// their content addressable digest.
 #[async_trait]
 pub trait ManifestStore {
+    /// Store a raw manifest, with the given digest as the
+    /// key, the content_type of the payload, and the raw
+    /// payload itself.
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
@@ -81,17 +89,27 @@ pub trait ManifestStore {
         raw_payload: bytes::Bytes,
     ) -> Result<(), ManifestStoreError>;
 
+    /// Lookup a manifest by its content addressable digest.
     async fn get_manifest(
         &self,
         digest: &digest::Digest,
     ) -> Result<protos::RawManifest, ManifestStoreError>;
 
+    /// Add a tag / reference in the repository to an already stored manifest. The
+    /// manifest must be already stored via 'store_manifest' in the given repository
+    /// for this to work.
     async fn tag_manifest(
         &self,
         repository: &str,
         reference: &str,
         manifest_digest: &digest::Digest,
     ) -> Result<(), ManifestStoreError>;
+
+    /// Fetch all tags for a given repository.
+    async fn get_repository_tags(
+        &self,
+        repository: &str,
+    ) -> Result<protos::RepositoryTags, ManifestStoreError>;
 }
 
 pub struct LmdbManifestStore {
@@ -190,6 +208,22 @@ impl ManifestStore for LmdbManifestStore {
         })
         .await?
     }
+
+    async fn get_repository_tags(
+        &self,
+        repository: &str,
+    ) -> Result<protos::RepositoryTags, ManifestStoreError> {
+        let env = self.env.clone();
+        let db = self.db.clone();
+        let key = format!("{}_tags", repository);
+
+        tokio::task::spawn_blocking(move || {
+            let tx = env.begin_ro_txn()?;
+            let buf = tx.get(db, &key)?;
+            Ok(protos::RepositoryTags::decode(buf)?)
+        })
+        .await?
+    }
 }
 
 async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
@@ -227,19 +261,78 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
 
 async fn process_manifest_get_or_head<M, E>(
     _either: E, // Dumb that we need this, because of our 'head' or 'get' filter
-    method: warp::http::Method,
+    method: Method,
     repository: String,
     reference: String,
     manifest_store: Arc<M>,
-) -> Result<Response<&'static str>, Rejection>
+) -> Result<Response<Vec<u8>>, Rejection>
 where
     M: ManifestStore + Send + Sync + 'static,
     E: Sized,
 {
-    Ok(warp::http::response::Builder::new()
+    // TODO: Make this easily convert to a common rejection.
+    let repository_tags = match manifest_store.get_repository_tags(&repository).await {
+        Ok(rt) => Ok(rt),
+        Err(ManifestStoreError::NotFound) => Err(ErrorResponse::new(
+            StatusCode::NOT_FOUND,
+            ErrorCode::NameUnknown,
+            format!("Failed to lookup repository tag for: {}", repository),
+        )
+        .into()),
+        Err(err) => {
+            tracing::error!("Error fetching tags: {:?}", err);
+            Err(ErrorResponse::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorCode::Unknown,
+                format!("Could not look up repository tags"),
+            ))
+        }
+    }?;
+
+    let manifest_ref = repository_tags
+        .tag_references
+        .iter()
+        .find(|tr| tr.tag_name == reference);
+
+    let (digest, manifest) = match manifest_ref {
+        Some(tag_ref) => {
+            let digest = match digest::Digest::try_from(&tag_ref.manifest_digest as &str) {
+                Ok(d) => d,
+                Err(err) => {
+                    tracing::error!("Digest decode fail: {:?}", err);
+                    return Err(ErrorResponse::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        ErrorCode::DigestInvalid,
+                        format!("Failed to decode tag digest: {}", tag_ref.manifest_digest),
+                    )
+                    .into());
+                }
+            };
+            let manifest = manifest_store.get_manifest(&digest).await?;
+            Ok((digest, manifest))
+        }
+        None => Err(ErrorResponse::new(
+            StatusCode::NOT_FOUND,
+            ErrorCode::ManifestUnknown,
+            format!(
+                "Could not find a manifest tagged with reference: {}",
+                reference
+            ),
+        )),
+    }?;
+
+    let response = warp::http::response::Builder::new()
         .status(StatusCode::OK)
-        .body("")
-        .unwrap())
+        .header("Content-Type", manifest.content_type)
+        .header("Docker-Content-Digest", format!("{}", digest));
+
+    if method == Method::HEAD {
+        // HEAD: Just send back headers
+        Ok(response.body(Vec::new()).unwrap())
+    } else {
+        // GET request: Send the content payload as well.
+        Ok(response.body(manifest.raw_payload).unwrap())
+    }
 }
 
 fn manifest_put<M: ManifestStore + Send + Sync + 'static>(

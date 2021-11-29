@@ -6,6 +6,15 @@ use warp::{http::status::StatusCode, Rejection, Reply};
 pub enum ErrorCode {
     #[serde(rename = "DIGEST_INVALID")]
     DigestInvalid,
+
+    #[serde(rename = "MANIFEST_UNKNOWN")]
+    ManifestUnknown,
+
+    #[serde(rename = "NAME_UKNOWN")]
+    NameUnknown,
+
+    #[serde(rename = "UNKNOWN")]
+    Unknown,
 }
 
 #[derive(Debug, Serialize)]
