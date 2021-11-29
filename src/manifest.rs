@@ -235,7 +235,21 @@ fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
         .and_then(process_manifest_put)
 }
 
+fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    (warp::get().or(warp::head()))
+        .and(warp::method())
+        .and(warp::path!("v2" / String / "manifests" / String))
+        .and(warp::filters::ext::get::<Arc<M>>())
+        .map(|_, method, repo, reference, _manifest_store| {
+            format!(
+                "Got manifest {} request for repo {}, reference: {}",
+                method, repo, reference
+            )
+        })
+}
+
 pub fn routes<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    manifest_put::<M>()
+    manifest_put::<M>().or(manifest_get_or_head::<M>())
 }
