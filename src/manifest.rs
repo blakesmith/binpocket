@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use bytes::Bytes;
 use lmdb::Transaction;
 use prost::Message;
 use serde::Deserialize;
@@ -78,13 +77,14 @@ pub trait ManifestStore {
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
-        json_payload: bytes::Bytes,
+        content_type: String,
+        raw_payload: bytes::Bytes,
     ) -> Result<(), ManifestStoreError>;
 
     async fn get_manifest(
         &self,
         digest: &digest::Digest,
-    ) -> Result<bytes::Bytes, ManifestStoreError>;
+    ) -> Result<protos::RawManifest, ManifestStoreError>;
 
     async fn tag_manifest(
         &self,
@@ -111,14 +111,21 @@ impl ManifestStore for LmdbManifestStore {
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
-        json_payload: bytes::Bytes,
+        content_type: String,
+        raw_payload: bytes::Bytes,
     ) -> Result<(), ManifestStoreError> {
         let env = self.env.clone();
         let db = self.db.clone();
         let digest_bytes = digest.get_bytes();
+        let raw_manifest = protos::RawManifest {
+            content_type: content_type,
+            raw_payload: raw_payload.to_vec(),
+        };
+        let mut value = bytes::BytesMut::new();
+        raw_manifest.encode(&mut value)?;
         tokio::task::spawn_blocking(move || {
             let mut tx = env.begin_rw_txn()?;
-            tx.put(db, &digest_bytes, &json_payload, lmdb::WriteFlags::empty())?;
+            tx.put(db, &digest_bytes, &value, lmdb::WriteFlags::empty())?;
             tx.commit().map_err(|err| err.into())
         })
         .await?
@@ -127,7 +134,7 @@ impl ManifestStore for LmdbManifestStore {
     async fn get_manifest(
         &self,
         digest: &digest::Digest,
-    ) -> Result<bytes::Bytes, ManifestStoreError> {
+    ) -> Result<protos::RawManifest, ManifestStoreError> {
         let env = self.env.clone();
         let db = self.db.clone();
         let digest_bytes = digest.get_bytes();
@@ -138,7 +145,7 @@ impl ManifestStore for LmdbManifestStore {
                 Err(lmdb::Error::NotFound) => Err(ManifestStoreError::NotFound),
                 Err(err) => Err(err.into()),
             }?;
-            Ok(Bytes::copy_from_slice(buf))
+            Ok(protos::RawManifest::decode(buf)?)
         })
         .await?
     }
@@ -188,6 +195,7 @@ impl ManifestStore for LmdbManifestStore {
 async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
     repository: String,
     reference: String,
+    content_type: String,
     manifest_store: Arc<M>,
     body: bytes::Bytes,
 ) -> Result<Response<&'static str>, Rejection> {
@@ -202,7 +210,9 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
     );
     // TODO: Validate the manifest content before storing
     // it.
-    manifest_store.store_manifest(&digest, body).await?;
+    manifest_store
+        .store_manifest(&digest, content_type, body)
+        .await?;
     manifest_store
         .tag_manifest(&repository, &reference, &digest)
         .await?;
@@ -219,6 +229,7 @@ fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
         .and(warp::path!("v2" / String / "manifests" / String))
+        .and(warp::header::<String>("Content-Type"))
         .and(warp::filters::ext::get::<Arc<M>>())
         .and(warp::body::bytes())
         .and_then(process_manifest_put)

@@ -26,3 +26,19 @@ message TagReference {
     string manifest_digest = 2;
 }
 
+// The raw stored value of a manifest.
+// Because manifests are content hashed
+// via a digest, we must reproduce the manifest
+// byte-for-byte identically to the way it
+// was uploaded. As such, we just store the
+// manifest bytes directly, along with any
+// other useful metadata.
+message RawManifest {
+    // The 'Content-Type' header that was
+    // uploaded. Example: 'application/vnd.docker.distribution.manifest.v2+json'
+    string content_type = 1;
+
+    // The raw manifest payload that was
+    // sent to us.
+    bytes raw_payload = 2;
+}
