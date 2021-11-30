@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bytes::Buf;
 use core::pin::Pin;
 
-use futures_util::{Stream, StreamExt};
+use futures_util::{stream, Stream, StreamExt};
 use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
@@ -550,12 +550,49 @@ where
     }
 }
 
+async fn fetch_blob<B: BlobStore + Send + Sync + 'static>(
+    _repository: String,
+    digest_raw: String,
+    blob_store: Arc<B>,
+) -> Result<Response<hyper::Body>, Rejection>
+where
+    B: BlobStore + Send + Sync + 'static,
+{
+    let digest = match digest::Digest::try_from(&digest_raw as &str) {
+        Ok(d) => d,
+        Err(_err) => {
+            return Ok(warp::http::response::Builder::new()
+                .status(StatusCode::BAD_REQUEST)
+                .body(hyper::Body::wrap_stream(stream::empty::<
+                    Result<bytes::Bytes, std::io::Error>,
+                >()))
+                .unwrap())
+        }
+    };
+
+    let chunks: Vec<Result<_, std::io::Error>> = vec![Ok("hello"), Ok(" "), Ok("world")];
+    let stream = futures_util::stream::iter(chunks);
+    let body = hyper::Body::wrap_stream(stream);
+    Ok(warp::http::response::Builder::new()
+        .status(StatusCode::OK)
+        .body(body)
+        .unwrap())
+}
+
 fn blob_exists<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::head()
         .and(warp::path!("v2" / String / "blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(check_blob_exists)
+}
+
+fn blob_get<B: BlobStore + Send + Sync + 'static>(
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::get()
+        .and(warp::path!("v2" / String / "blobs" / String))
+        .and(warp::filters::ext::get::<Arc<B>>())
+        .and_then(fetch_blob)
 }
 
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
@@ -591,6 +628,7 @@ fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
 pub fn routes<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     blob_exists::<B>()
+        .or(blob_get::<B>())
         .or(blob_upload_post::<B>())
         .or(blob_upload_put::<B>())
         .or(blob_upload_patch::<B>())
