@@ -3,7 +3,6 @@ mod digest;
 mod error;
 mod manifest;
 mod range;
-mod read_util;
 
 use hyper::Server;
 use manifest::LmdbManifestStore;

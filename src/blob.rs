@@ -1,13 +1,8 @@
 use async_lock::{Mutex, RwLock};
-use async_std::{
-    fs,
-    fs::{File, OpenOptions},
-    io::{prelude::SeekExt, Error as AIOError, ErrorKind, Read, SeekFrom, Write, WriteExt},
-    task::{Context, Poll},
-};
 use async_trait::async_trait;
 use bytes::Buf;
 use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use futures_util::{stream, Stream, StreamExt};
 use serde::Deserialize;
@@ -17,6 +12,15 @@ use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use std::io::{ErrorKind, SeekFrom};
+use tokio::{
+    fs,
+    fs::{File, OpenOptions},
+    io::{AsyncRead, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
+};
+use tokio_util::codec::{BytesCodec, FramedRead};
+
 use uuid::Uuid;
 use warp::{
     http::{Response, StatusCode},
@@ -25,7 +29,6 @@ use warp::{
 
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::range::ContentRange;
-use crate::read_util::bytes_stream;
 use crate::{
     digest,
     digest::{deserialize_optional_digest_string, DigestAlgorithm},
@@ -35,16 +38,16 @@ use crate::{
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum BlobStoreError {
-    AIO(async_std::io::Error),
+    Io(std::io::Error),
     SessionNotFound(Uuid),
     UnsupportedDigest,
     NotFound,
     Unknown,
 }
 
-impl From<AIOError> for BlobStoreError {
-    fn from(e: AIOError) -> Self {
-        BlobStoreError::AIO(e)
+impl From<std::io::Error> for BlobStoreError {
+    fn from(e: std::io::Error) -> Self {
+        BlobStoreError::Io(e)
     }
 }
 
@@ -64,8 +67,8 @@ pub struct BlobMetadata {
 /// a blob upload, or 'cancel' it to clean up temporary session upload state.
 #[async_trait]
 pub trait BlobStore {
-    type Writer: Write + Unpin + Send + Debug;
-    type Reader: Read + Unpin + Send + Debug;
+    type Writer: AsyncWrite + Unpin + Send + Debug;
+    type Reader: AsyncRead + Unpin + Send + Debug;
 
     /// Begin uploading a blob, returns the session_id as a Uuid. After calling,
     /// clients should now be able to call 'get_session'.
@@ -107,7 +110,7 @@ pub trait BlobStore {
 /// cleaned up from the outstanding upload sessions that the server
 /// is tracking once an upload is completed or aborted.
 #[derive(Debug)]
-pub struct UploadSession<W: Write + Unpin + Send + Debug> {
+pub struct UploadSession<W: AsyncWrite + Unpin + Send + Debug> {
     id: Uuid,
     writer: W,
     bytes_written: u64,
@@ -115,12 +118,12 @@ pub struct UploadSession<W: Write + Unpin + Send + Debug> {
     sha512: Sha512,
 }
 
-impl<W: Write + Unpin + Send + Debug> Write for UploadSession<W> {
+impl<W: AsyncWrite + Unpin + Send + Debug> AsyncWrite for UploadSession<W> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<Result<usize, AIOError>> {
+    ) -> Poll<Result<usize, std::io::Error>> {
         match Pin::new(&mut self.writer).poll_write(cx, buf) {
             Poll::Ready(Ok(bytes_written)) => {
                 self.bytes_written += bytes_written as u64;
@@ -132,16 +135,22 @@ impl<W: Write + Unpin + Send + Debug> Write for UploadSession<W> {
         }
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), AIOError>> {
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
         Pin::new(&mut self.writer).poll_flush(cx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), AIOError>> {
-        Pin::new(&mut self.writer).poll_close(cx)
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.writer).poll_shutdown(cx)
     }
 }
 
-impl<W: Write + Unpin + Send + Debug> UploadSession<W> {
+impl<W: AsyncWrite + Unpin + Send + Debug> UploadSession<W> {
     fn new(writer: W, id: Uuid) -> Self {
         Self {
             id,
@@ -594,7 +603,10 @@ where
         Ok(reader) => Ok(warp::http::response::Builder::new()
             .header("Docker-Content-Digest", format!("{}", digest))
             .status(StatusCode::OK)
-            .body(hyper::Body::wrap_stream(bytes_stream(reader)))
+            .body(hyper::Body::wrap_stream(FramedRead::new(
+                reader,
+                BytesCodec::new(),
+            )))
             .unwrap()),
         Err(BlobStoreError::NotFound) => {
             tracing::info!("Could not find digest: {}", digest);
