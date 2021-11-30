@@ -324,6 +324,7 @@ where
     let response = warp::http::response::Builder::new()
         .status(StatusCode::OK)
         .header("Content-Type", manifest.content_type)
+        .header("Content-Length", manifest.raw_payload.len())
         .header("Docker-Content-Digest", format!("{}", digest));
 
     if method == Method::HEAD {
