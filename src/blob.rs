@@ -2,7 +2,7 @@ use async_lock::{Mutex, RwLock};
 use async_std::{
     fs,
     fs::{File, OpenOptions},
-    io::{prelude::SeekExt, Error as AIOError, ErrorKind, SeekFrom, Write, WriteExt},
+    io::{prelude::SeekExt, Error as AIOError, ErrorKind, Read, SeekFrom, Write, WriteExt},
     task::{Context, Poll},
 };
 use async_trait::async_trait;
@@ -25,6 +25,7 @@ use warp::{
 
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::range::ContentRange;
+use crate::read_util::bytes_stream;
 use crate::{
     digest,
     digest::{deserialize_optional_digest_string, DigestAlgorithm},
@@ -64,6 +65,7 @@ pub struct BlobMetadata {
 #[async_trait]
 pub trait BlobStore {
     type Writer: Write + Unpin + Send + Debug;
+    type Reader: Read + Unpin + Send + Debug;
 
     /// Begin uploading a blob, returns the session_id as a Uuid. After calling,
     /// clients should now be able to call 'get_session'.
@@ -95,6 +97,9 @@ pub trait BlobStore {
     /// used to check if the blob already exists in the store, and
     /// to retrieve the blob content byte size.
     async fn blob_metadata(&self, digest: &digest::Digest) -> Result<BlobMetadata, BlobStoreError>;
+
+    /// Read the raw blob contents.
+    async fn get_blob(&self, digest: &digest::Digest) -> Result<Self::Reader, BlobStoreError>;
 }
 
 /// Represents the state that needs to be tracked by the server
@@ -191,6 +196,7 @@ impl FsBlobStore {
 #[async_trait]
 impl BlobStore for FsBlobStore {
     type Writer = File;
+    type Reader = File;
 
     async fn start_upload(&self) -> Result<Uuid, BlobStoreError> {
         let session_id = Uuid::new_v4();
@@ -294,6 +300,20 @@ impl BlobStore for FsBlobStore {
             Ok(metadata) => Ok(BlobMetadata {
                 byte_size: metadata.len(),
             }),
+            Err(err) if err.kind() == ErrorKind::NotFound => Err(BlobStoreError::NotFound),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn get_blob(&self, digest: &digest::Digest) -> Result<Self::Reader, BlobStoreError> {
+        match File::open(
+            self.root_directory
+                .join("blobs")
+                .join(format!("{}", digest)),
+        )
+        .await
+        {
+            Ok(file) => Ok(file),
             Err(err) if err.kind() == ErrorKind::NotFound => Err(BlobStoreError::NotFound),
             Err(err) => Err(err.into()),
         }
@@ -570,13 +590,23 @@ where
         }
     };
 
-    let chunks: Vec<Result<_, std::io::Error>> = vec![Ok("hello"), Ok(" "), Ok("world")];
-    let stream = futures_util::stream::iter(chunks);
-    let body = hyper::Body::wrap_stream(stream);
-    Ok(warp::http::response::Builder::new()
-        .status(StatusCode::OK)
-        .body(body)
-        .unwrap())
+    match blob_store.get_blob(&digest).await {
+        Ok(reader) => Ok(warp::http::response::Builder::new()
+            .header("Docker-Content-Digest", format!("{}", digest))
+            .status(StatusCode::OK)
+            .body(hyper::Body::wrap_stream(bytes_stream(reader)))
+            .unwrap()),
+        Err(BlobStoreError::NotFound) => {
+            tracing::info!("Could not find digest: {}", digest);
+            Ok(warp::http::response::Builder::new()
+                .status(StatusCode::NOT_FOUND)
+                .body(hyper::Body::wrap_stream(stream::empty::<
+                    Result<bytes::Bytes, std::io::Error>,
+                >()))
+                .unwrap())
+        }
+        Err(err) => Err(err)?,
+    }
 }
 
 fn blob_exists<B: BlobStore + Send + Sync + 'static>(
