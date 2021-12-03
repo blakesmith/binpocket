@@ -259,19 +259,16 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
         .unwrap())
 }
 
-async fn process_manifest_get_or_head<M, E>(
-    _either: E, // Dumb that we need this, because of our 'head' or 'get' filter
-    method: Method,
-    repository: String,
-    reference: String,
-    manifest_store: Arc<M>,
-) -> Result<Response<Vec<u8>>, Rejection>
+async fn manifest_digest_for_tag<M>(
+    repository: &str,
+    tag: &str,
+    manifest_store: &Arc<M>,
+) -> Result<digest::Digest, Rejection>
 where
     M: ManifestStore + Send + Sync + 'static,
-    E: Sized,
 {
     // TODO: Make this easily convert to a common rejection.
-    let repository_tags = match manifest_store.get_repository_tags(&repository).await {
+    let repository_tags = match manifest_store.get_repository_tags(repository).await {
         Ok(rt) => Ok(rt),
         Err(ManifestStoreError::NotFound) => Err(ErrorResponse::new(
             StatusCode::NOT_FOUND,
@@ -292,9 +289,9 @@ where
     let manifest_ref = repository_tags
         .tag_references
         .iter()
-        .find(|tr| tr.tag_name == reference);
+        .find(|tr| tr.tag_name == tag);
 
-    let (digest, manifest) = match manifest_ref {
+    match manifest_ref {
         Some(tag_ref) => {
             let digest = match digest::Digest::try_from(&tag_ref.manifest_digest as &str) {
                 Ok(d) => d,
@@ -308,18 +305,30 @@ where
                     .into());
                 }
             };
-            let manifest = manifest_store.get_manifest(&digest).await?;
-            Ok((digest, manifest))
+            Ok(digest)
         }
         None => Err(ErrorResponse::new(
             StatusCode::NOT_FOUND,
             ErrorCode::ManifestUnknown,
-            format!(
-                "Could not find a manifest tagged with reference: {}",
-                reference
-            ),
-        )),
-    }?;
+            format!("Could not find a manifest tagged with reference: {}", tag),
+        )
+        .into()),
+    }
+}
+
+async fn process_manifest_get_or_head<M, E>(
+    _either: E, // Dumb that we need this, because of our 'head' or 'get' filter
+    method: Method,
+    repository: String,
+    reference: String,
+    manifest_store: Arc<M>,
+) -> Result<Response<Vec<u8>>, Rejection>
+where
+    M: ManifestStore + Send + Sync + 'static,
+    E: Sized,
+{
+    let digest = manifest_digest_for_tag(&repository, &reference, &manifest_store).await?;
+    let manifest = manifest_store.get_manifest(&digest).await?;
 
     let response = warp::http::response::Builder::new()
         .status(StatusCode::OK)
