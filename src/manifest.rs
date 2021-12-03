@@ -327,7 +327,10 @@ where
     M: ManifestStore + Send + Sync + 'static,
     E: Sized,
 {
-    let digest = manifest_digest_for_tag(&repository, &reference, &manifest_store).await?;
+    let digest = match digest::Digest::try_from(&reference as &str) {
+        Ok(d) => d,
+        Err(_err) => manifest_digest_for_tag(&repository, &reference, &manifest_store).await?,
+    };
     let manifest = manifest_store.get_manifest(&digest).await?;
 
     let response = warp::http::response::Builder::new()
