@@ -20,8 +20,8 @@ use tower_http::{
 use tracing::metadata::Level;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
-fn oci_root_v2() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::get().and(warp::path!("v2")).map(|| StatusCode::OK)
+fn oci_root() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    warp::get().map(|| StatusCode::OK)
 }
 
 #[tokio::main]
@@ -43,10 +43,14 @@ async fn main() {
     let manifest_store =
         Arc::new(LmdbManifestStore::open(env).expect("Could not open manifest LMDB database"));
 
-    let routes = oci_root_v2()
-        .or(blob::routes::<blob::FsBlobStore>())
-        .or(manifest::routes::<manifest::LmdbManifestStore>())
+    let routes = warp::path("v2")
+        .and(
+            (blob::routes::<blob::FsBlobStore>())
+                .or(manifest::routes::<manifest::LmdbManifestStore>())
+                .or(oci_root()),
+        )
         .recover(error::handle_rejection);
+
     let warp_service = warp::service(routes);
 
     let service = ServiceBuilder::new()

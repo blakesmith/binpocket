@@ -351,7 +351,7 @@ where
 fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
-        .and(warp::path!("v2" / String / "manifests" / String))
+        .and(warp::path!(String / "manifests" / String))
         .and(warp::header::<String>("Content-Type"))
         .and(warp::filters::ext::get::<Arc<M>>())
         .and(warp::body::bytes())
@@ -362,7 +362,7 @@ fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     (warp::get().or(warp::head()))
         .and(warp::method())
-        .and(warp::path!("v2" / String / "manifests" / String))
+        .and(warp::path!(String / "manifests" / String))
         .and(warp::filters::ext::get::<Arc<M>>())
         .and_then(process_manifest_get_or_head)
 }

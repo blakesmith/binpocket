@@ -624,7 +624,7 @@ where
 fn blob_exists<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::head()
-        .and(warp::path!("v2" / String / "blobs" / String))
+        .and(warp::path!(String / "blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(check_blob_exists)
 }
@@ -632,7 +632,7 @@ fn blob_exists<B: BlobStore + Send + Sync + 'static>(
 fn blob_get<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::get()
-        .and(warp::path!("v2" / String / "blobs" / String))
+        .and(warp::path!(String / "blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(fetch_blob)
 }
@@ -640,7 +640,7 @@ fn blob_get<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
-        .and(warp::path!("v2" / String / "blobs" / "uploads" / Uuid))
+        .and(warp::path!(String / "blobs" / "uploads" / Uuid))
         .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
@@ -650,7 +650,7 @@ fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::post()
-        .and(warp::path!("v2" / String / "blobs" / "uploads"))
+        .and(warp::path!(String / "blobs" / "uploads"))
         .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
@@ -660,7 +660,7 @@ fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::patch()
-        .and(warp::path!("v2" / String / "blobs" / "uploads" / Uuid))
+        .and(warp::path!(String / "blobs" / "uploads" / Uuid))
         .and(warp::header::optional::<ContentRange>("Content-Range"))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
