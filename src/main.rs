@@ -22,7 +22,10 @@ use tracing::metadata::Level;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 fn version_root() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    warp::get().and(warp::path::end()).map(|| StatusCode::OK)
+    warp::get()
+        .and(warp::path::end())
+        .map(|| StatusCode::OK)
+        .boxed()
 }
 
 #[tokio::main]
