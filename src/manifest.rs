@@ -317,8 +317,7 @@ where
     }
 }
 
-async fn process_manifest_get_or_head<M, E>(
-    _either: E, // Dumb that we need this, because of our 'head' or 'get' filter
+async fn process_manifest_get_or_head<M>(
     method: Method,
     repository: Repository,
     reference: String,
@@ -326,7 +325,6 @@ async fn process_manifest_get_or_head<M, E>(
 ) -> Result<Response<Vec<u8>>, Rejection>
 where
     M: ManifestStore + Send + Sync + 'static,
-    E: Sized,
 {
     let digest = match digest::Digest::try_from(&reference as &str) {
         Ok(d) => d,
@@ -363,6 +361,8 @@ fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
 fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     (warp::get().or(warp::head()))
+        .map(|_| ())
+        .untuple_one() // Remove the unused method filter.
         .and(warp::method())
         .and(repository())
         .and(warp::path!("manifests" / String))
