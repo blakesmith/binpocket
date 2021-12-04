@@ -356,6 +356,7 @@ fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
         .and(warp::filters::ext::get::<Arc<M>>())
         .and(warp::body::bytes())
         .and_then(process_manifest_put)
+        .boxed()
 }
 
 fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
@@ -368,6 +369,7 @@ fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
         .and(warp::path!("manifests" / String))
         .and(warp::filters::ext::get::<Arc<M>>())
         .and_then(process_manifest_get_or_head)
+        .boxed()
 }
 
 pub fn routes<M: ManifestStore + Send + Sync + 'static>(

@@ -629,6 +629,7 @@ fn blob_exists<B: BlobStore + Send + Sync + 'static>(
         .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(check_blob_exists)
+        .boxed()
 }
 
 fn blob_get<B: BlobStore + Send + Sync + 'static>(
@@ -638,6 +639,7 @@ fn blob_get<B: BlobStore + Send + Sync + 'static>(
         .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(fetch_blob)
+        .boxed()
 }
 
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
@@ -649,6 +651,7 @@ fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
         .and_then(receive_put_upload)
+        .boxed()
 }
 
 fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
@@ -660,6 +663,7 @@ fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
         .and_then(start_session_or_blob_upload)
+        .boxed()
 }
 
 fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
@@ -671,6 +675,7 @@ fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
         .and_then(receive_patch_upload)
+        .boxed()
 }
 
 pub fn routes<B: BlobStore + Send + Sync + 'static>(
