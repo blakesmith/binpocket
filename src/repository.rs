@@ -7,7 +7,7 @@ pub struct Repository {
 
 pub fn repository() -> impl Filter<Extract = (Repository,), Error = Rejection> + Copy {
     warp::path::param().map(|name| {
-        tracing::info!("Repository name is: {}", name);
+        tracing::debug!("Repository name is: {}", name);
         Repository { name }
     })
 }
