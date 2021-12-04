@@ -11,6 +11,7 @@ use warp::{
 };
 
 use crate::error::{ErrorCode, ErrorResponse};
+use crate::repository::{repository, Repository};
 use crate::{digest, digest::deserialize_digest_string};
 
 pub mod protos {
@@ -227,13 +228,13 @@ impl ManifestStore for LmdbManifestStore {
 }
 
 async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
-    repository: String,
+    repository: Repository,
     reference: String,
     content_type: String,
     manifest_store: Arc<M>,
     body: bytes::Bytes,
 ) -> Result<Response<&'static str>, Rejection> {
-    let location = format!("/v2/{}/manifests/{}", &repository, &reference);
+    let location = format!("/v2/{}/manifests/{}", &repository.name, &reference);
 
     // Calculate the manifest digest.
     let mut sha256 = Sha256::new();
@@ -248,7 +249,7 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
         .store_manifest(&digest, content_type, body)
         .await?;
     manifest_store
-        .tag_manifest(&repository, &reference, &digest)
+        .tag_manifest(&repository.name, &reference, &digest)
         .await?;
 
     Ok(warp::http::response::Builder::new()
@@ -319,7 +320,7 @@ where
 async fn process_manifest_get_or_head<M, E>(
     _either: E, // Dumb that we need this, because of our 'head' or 'get' filter
     method: Method,
-    repository: String,
+    repository: Repository,
     reference: String,
     manifest_store: Arc<M>,
 ) -> Result<Response<Vec<u8>>, Rejection>
@@ -329,7 +330,7 @@ where
 {
     let digest = match digest::Digest::try_from(&reference as &str) {
         Ok(d) => d,
-        Err(_err) => manifest_digest_for_tag(&repository, &reference, &manifest_store).await?,
+        Err(_err) => manifest_digest_for_tag(&repository.name, &reference, &manifest_store).await?,
     };
     let manifest = manifest_store.get_manifest(&digest).await?;
 
@@ -351,7 +352,8 @@ where
 fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
-        .and(warp::path!(String / "manifests" / String))
+        .and(repository())
+        .and(warp::path!("manifests" / String))
         .and(warp::header::<String>("Content-Type"))
         .and(warp::filters::ext::get::<Arc<M>>())
         .and(warp::body::bytes())
@@ -362,7 +364,8 @@ fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     (warp::get().or(warp::head()))
         .and(warp::method())
-        .and(warp::path!(String / "manifests" / String))
+        .and(repository())
+        .and(warp::path!("manifests" / String))
         .and(warp::filters::ext::get::<Arc<M>>())
         .and_then(process_manifest_get_or_head)
 }

@@ -3,6 +3,7 @@ mod digest;
 mod error;
 mod manifest;
 mod range;
+mod repository;
 
 use hyper::Server;
 use manifest::LmdbManifestStore;
@@ -20,8 +21,8 @@ use tower_http::{
 use tracing::metadata::Level;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
-fn oci_root() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    warp::get().map(|| StatusCode::OK)
+fn version_root() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    warp::get().and(warp::path::end()).map(|| StatusCode::OK)
 }
 
 #[tokio::main]
@@ -45,9 +46,9 @@ async fn main() {
 
     let routes = warp::path("v2")
         .and(
-            (blob::routes::<blob::FsBlobStore>())
-                .or(manifest::routes::<manifest::LmdbManifestStore>())
-                .or(oci_root()),
+            (version_root())
+                .or(blob::routes::<blob::FsBlobStore>())
+                .or(manifest::routes::<manifest::LmdbManifestStore>()),
         )
         .recover(error::handle_rejection);
 

@@ -29,6 +29,7 @@ use warp::{
 
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::range::ContentRange;
+use crate::repository::{repository, Repository};
 use crate::{
     digest,
     digest::{deserialize_optional_digest_string, DigestAlgorithm},
@@ -337,7 +338,7 @@ struct BlobPutQueryParams {
 }
 
 async fn receive_upload<B, S, BUF>(
-    repository: String,
+    repository: Repository,
     session_id: Uuid,
     query_params: BlobPutQueryParams,
     content_range: Option<ContentRange>,
@@ -350,7 +351,7 @@ where
     S: Stream<Item = Result<BUF, warp::Error>> + Unpin,
 {
     tracing::debug!(
-        "Starting upload, repository: {}, session_id: {}",
+        "Starting upload, repository: {:?}, session_id: {}",
         repository,
         session_id
     );
@@ -428,7 +429,7 @@ where
                 blob_store
                     .finalize_upload(&session_id, &computed_digest)
                     .await?;
-                let location = format!("/v2/{}/blobs/{}", &repository, &computed_digest);
+                let location = format!("/v2/{}/blobs/{}", &repository.name, &computed_digest);
                 Ok(warp::http::response::Builder::new()
                     .header("Location", location)
                     .status(StatusCode::CREATED)
@@ -446,7 +447,7 @@ where
             Ok(warp::http::response::Builder::new()
                 .header(
                     "Location",
-                    format!("/v2/{}/blobs/uploads/{}", &repository, &session_id),
+                    format!("/v2/{}/blobs/uploads/{}", &repository.name, &session_id),
                 )
                 .header(
                     "Docker-Upload-UUID",
@@ -461,7 +462,7 @@ where
 }
 
 async fn receive_put_upload<B, S, BUF>(
-    repository: String,
+    repository: Repository,
     session_id: Uuid,
     query_params: BlobPutQueryParams,
     blob_store: Arc<B>,
@@ -484,7 +485,7 @@ where
 }
 
 async fn receive_patch_upload<B, S, BUF>(
-    repository: String,
+    repository: Repository,
     session_id: Uuid,
     content_range: Option<ContentRange>,
     blob_store: Arc<B>,
@@ -507,7 +508,7 @@ where
 }
 
 async fn start_session_or_blob_upload<B, S, BUF>(
-    repository: String,
+    repository: Repository,
     query_params: BlobPutQueryParams,
     blob_store: Arc<B>,
     byte_stream: S,
@@ -533,7 +534,7 @@ where
         None => {
             let location = format!(
                 "/v2/{}/blobs/uploads/{}",
-                repository,
+                &repository.name,
                 session_id.to_hyphenated_ref()
             );
 
@@ -547,7 +548,7 @@ where
 }
 
 async fn check_blob_exists<B: BlobStore + Send + Sync + 'static>(
-    _repository: String,
+    _repository: Repository,
     digest_raw: String,
     blob_store: Arc<B>,
 ) -> Result<Response<&'static str>, Rejection>
@@ -580,7 +581,7 @@ where
 }
 
 async fn fetch_blob<B: BlobStore + Send + Sync + 'static>(
-    _repository: String,
+    _repository: Repository,
     digest_raw: String,
     blob_store: Arc<B>,
 ) -> Result<Response<hyper::Body>, Rejection>
@@ -624,7 +625,8 @@ where
 fn blob_exists<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::head()
-        .and(warp::path!(String / "blobs" / String))
+        .and(repository())
+        .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(check_blob_exists)
 }
@@ -632,7 +634,8 @@ fn blob_exists<B: BlobStore + Send + Sync + 'static>(
 fn blob_get<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::get()
-        .and(warp::path!(String / "blobs" / String))
+        .and(repository())
+        .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(fetch_blob)
 }
@@ -640,7 +643,8 @@ fn blob_get<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
-        .and(warp::path!(String / "blobs" / "uploads" / Uuid))
+        .and(repository())
+        .and(warp::path!("blobs" / "uploads" / Uuid))
         .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
@@ -650,7 +654,8 @@ fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::post()
-        .and(warp::path!(String / "blobs" / "uploads"))
+        .and(repository())
+        .and(warp::path!("blobs" / "uploads"))
         .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
@@ -660,7 +665,8 @@ fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::patch()
-        .and(warp::path!(String / "blobs" / "uploads" / Uuid))
+        .and(repository())
+        .and(warp::path!("blobs" / "uploads" / Uuid))
         .and(warp::header::optional::<ContentRange>("Content-Range"))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
