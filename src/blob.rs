@@ -27,6 +27,7 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
+use super::{auth, auth::principal::Principal};
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::range::ContentRange;
 use crate::repository::{repository, Repository};
@@ -338,6 +339,7 @@ struct BlobPutQueryParams {
 }
 
 async fn receive_upload<B, S, BUF>(
+    _principal: Option<Principal>,
     repository: Repository,
     session_id: Uuid,
     query_params: BlobPutQueryParams,
@@ -462,6 +464,7 @@ where
 }
 
 async fn receive_put_upload<B, S, BUF>(
+    principal: Option<Principal>,
     repository: Repository,
     session_id: Uuid,
     query_params: BlobPutQueryParams,
@@ -474,6 +477,7 @@ where
     S: Stream<Item = Result<BUF, warp::Error>> + Unpin,
 {
     receive_upload(
+        principal,
         repository,
         session_id,
         query_params,
@@ -485,6 +489,7 @@ where
 }
 
 async fn receive_patch_upload<B, S, BUF>(
+    principal: Option<Principal>,
     repository: Repository,
     session_id: Uuid,
     content_range: Option<ContentRange>,
@@ -497,6 +502,7 @@ where
     S: Stream<Item = Result<BUF, warp::Error>> + Unpin,
 {
     receive_upload(
+        principal,
         repository,
         session_id,
         BlobPutQueryParams { digest: None },
@@ -508,6 +514,7 @@ where
 }
 
 async fn start_session_or_blob_upload<B, S, BUF>(
+    principal: Option<Principal>,
     repository: Repository,
     query_params: BlobPutQueryParams,
     blob_store: Arc<B>,
@@ -522,6 +529,7 @@ where
     match query_params.digest {
         Some(ref _client_digest) => {
             receive_upload(
+                principal,
                 repository,
                 session_id,
                 query_params,
@@ -548,6 +556,7 @@ where
 }
 
 async fn check_blob_exists<B: BlobStore + Send + Sync + 'static>(
+    _principal: Option<Principal>,
     _repository: Repository,
     digest_raw: String,
     blob_store: Arc<B>,
@@ -581,6 +590,7 @@ where
 }
 
 async fn fetch_blob<B: BlobStore + Send + Sync + 'static>(
+    _principal: Option<Principal>,
     _repository: Repository,
     digest_raw: String,
     blob_store: Arc<B>,
@@ -625,6 +635,7 @@ where
 fn blob_exists<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::head()
+        .and(auth::authenticate())
         .and(repository())
         .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
@@ -635,6 +646,7 @@ fn blob_exists<B: BlobStore + Send + Sync + 'static>(
 fn blob_get<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::get()
+        .and(auth::authenticate())
         .and(repository())
         .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
@@ -645,6 +657,7 @@ fn blob_get<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
+        .and(auth::authenticate())
         .and(repository())
         .and(warp::path!("blobs" / "uploads" / Uuid))
         .and(warp::query::<BlobPutQueryParams>())
@@ -657,6 +670,7 @@ fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::post()
+        .and(auth::authenticate())
         .and(repository())
         .and(warp::path!("blobs" / "uploads"))
         .and(warp::query::<BlobPutQueryParams>())
@@ -669,6 +683,7 @@ fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::patch()
+        .and(auth::authenticate())
         .and(repository())
         .and(warp::path!("blobs" / "uploads" / Uuid))
         .and(warp::header::optional::<ContentRange>("Content-Range"))

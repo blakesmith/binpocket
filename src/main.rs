@@ -22,6 +22,11 @@ use tower_http::{
 use tracing::metadata::Level;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
+use crate::auth::{
+    principal::{Principal, User},
+    Authenticator, FixedBearerTokenAuthenticator,
+};
+
 fn version_root() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     warp::get()
         .and(warp::path::end())
@@ -48,6 +53,14 @@ async fn main() {
     let manifest_store =
         Arc::new(LmdbManifestStore::open(env).expect("Could not open manifest LMDB database"));
 
+    let authenticator: Arc<Box<dyn Authenticator>> =
+        Arc::new(Box::new(FixedBearerTokenAuthenticator {
+            token: "a_global_test_token".to_string(),
+            principal: Principal::User(User {
+                name: "global_admin".to_string(),
+            }),
+        }));
+
     let routes = warp::path("v2")
         .and(
             (version_root())
@@ -63,6 +76,7 @@ async fn main() {
         .layer(CompressionLayer::new())
         .layer(AddExtensionLayer::new(blob_store))
         .layer(AddExtensionLayer::new(manifest_store))
+        .layer(AddExtensionLayer::new(authenticator))
         .service(warp_service);
     let addr = SocketAddr::from(([0, 0, 0, 0], 3030));
     let listener = TcpListener::bind(addr).unwrap();

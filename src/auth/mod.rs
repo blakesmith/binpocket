@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use warp::{Filter, Rejection};
 
-use self::principal::{Principal, User};
+use self::principal::Principal;
 
 pub enum Credential {
     BearerToken(String),
@@ -34,8 +34,8 @@ pub trait Authenticator: Send + Sync {
 /// Authenticator that authenticates on a global bearer token, in exchange
 /// for a given Principal.
 pub struct FixedBearerTokenAuthenticator {
-    token: String,
-    principal: Principal,
+    pub token: String,
+    pub principal: Principal,
 }
 
 #[async_trait]
@@ -50,7 +50,6 @@ impl Authenticator for FixedBearerTokenAuthenticator {
                     Err(AuthenticationError::InvalidCredentials)
                 }
             }
-            _ => Err(AuthenticationError::UnknownCredentialType),
         }
     }
 }
