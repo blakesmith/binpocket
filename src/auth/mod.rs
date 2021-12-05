@@ -2,12 +2,24 @@ pub mod principal;
 
 use async_trait::async_trait;
 use std::sync::Arc;
-use warp::{Filter, Rejection};
+use warp::{http::StatusCode, Filter, Rejection};
 
 use self::principal::Principal;
 
+use crate::error::{ErrorCode, ErrorResponse};
+
 pub enum Credential {
     BearerToken(String),
+}
+
+#[derive(PartialEq, Debug)]
+pub enum Visibility {
+    Public,
+    Private,
+}
+
+pub trait AuthzTarget {
+    fn visibility(&self) -> Visibility;
 }
 
 fn authorization_header() -> impl Filter<Extract = (Option<Credential>,), Error = Rejection> + Clone
@@ -44,6 +56,7 @@ impl Authenticator for FixedBearerTokenAuthenticator {
         match credential {
             Credential::BearerToken(token) => {
                 if token == self.token {
+                    tracing::debug!("Tokens match. Logged in!");
                     Ok(self.principal.clone())
                 } else {
                     tracing::debug!("Bearer token credentials don't match");
@@ -74,4 +87,25 @@ pub fn authenticate() -> impl Filter<Extract = (Option<Principal>,), Error = Rej
     warp::filters::ext::get::<Arc<Box<dyn Authenticator>>>()
         .and(authorization_header())
         .and_then(check_authentication)
+}
+
+#[derive(Debug)]
+pub enum AuthorizationError {}
+
+impl warp::reject::Reject for AuthorizationError {}
+
+pub async fn authorize<T>(principal: Option<Principal>, t: T) -> Result<T, Rejection>
+where
+    T: AuthzTarget,
+{
+    if principal.is_some() || t.visibility() == Visibility::Public {
+        Ok(t)
+    } else {
+        Err(ErrorResponse::new(
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::Denied,
+            "Access denied".to_string(),
+        )
+        .into())
+    }
 }

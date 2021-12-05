@@ -13,6 +13,9 @@ pub enum ErrorCode {
     #[serde(rename = "NAME_UKNOWN")]
     NameUnknown,
 
+    #[serde(rename = "DENIED")]
+    Denied,
+
     #[serde(rename = "UNKNOWN")]
     Unknown,
 }
