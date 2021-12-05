@@ -27,7 +27,7 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
-use super::{auth, auth::principal::Principal};
+use super::auth;
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::range::ContentRange;
 use crate::repository::{repository, Repository};
