@@ -94,18 +94,35 @@ pub enum AuthorizationError {}
 
 impl warp::reject::Reject for AuthorizationError {}
 
-pub async fn authorize<T>(principal: Option<Principal>, t: T) -> Result<T, Rejection>
+pub struct Authorizer {
+    pub web_root: String,
+}
+
+impl Authorizer {
+    pub fn authorize<T>(&self, principal: Option<Principal>, t: T) -> Result<T, Rejection>
+    where
+        T: AuthzTarget,
+    {
+        if principal.is_some() || t.visibility() == Visibility::Public {
+            Ok(t)
+        } else {
+            Err(ErrorResponse::new(
+                StatusCode::UNAUTHORIZED,
+                ErrorCode::Denied,
+                "Access denied".to_string(),
+            )
+            .into())
+        }
+    }
+}
+
+pub async fn authorize<T>(
+    principal: Option<Principal>,
+    t: T,
+    authorizer: Arc<Authorizer>,
+) -> Result<T, Rejection>
 where
     T: AuthzTarget,
 {
-    if principal.is_some() || t.visibility() == Visibility::Public {
-        Ok(t)
-    } else {
-        Err(ErrorResponse::new(
-            StatusCode::UNAUTHORIZED,
-            ErrorCode::Denied,
-            "Access denied".to_string(),
-        )
-        .into())
-    }
+    authorizer.authorize(principal, t)
 }

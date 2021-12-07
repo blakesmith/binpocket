@@ -24,7 +24,7 @@ use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use crate::auth::{
     principal::{Principal, User},
-    Authenticator, FixedBearerTokenAuthenticator,
+    Authenticator, Authorizer, FixedBearerTokenAuthenticator,
 };
 
 fn version_root() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -61,6 +61,10 @@ async fn main() {
             }),
         }));
 
+    let authorizer = Arc::new(Authorizer {
+        web_root: "127.0.0.1:3030".to_string(),
+    });
+
     let routes = warp::path("v2")
         .and(
             (version_root())
@@ -77,6 +81,7 @@ async fn main() {
         .layer(AddExtensionLayer::new(blob_store))
         .layer(AddExtensionLayer::new(manifest_store))
         .layer(AddExtensionLayer::new(authenticator))
+        .layer(AddExtensionLayer::new(authorizer))
         .service(warp_service);
     let addr = SocketAddr::from(([0, 0, 0, 0], 3030));
     let listener = TcpListener::bind(addr).unwrap();

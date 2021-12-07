@@ -1,4 +1,5 @@
-use crate::auth::{AuthzTarget, Visibility};
+use crate::auth::{self, AuthzTarget, Visibility};
+use std::sync::Arc;
 use warp::{Filter, Rejection};
 
 #[derive(Debug)]
@@ -19,4 +20,11 @@ pub fn repository() -> impl Filter<Extract = (Repository,), Error = Rejection> +
             Repository { name }
         })
         .boxed()
+}
+
+pub fn authorize_repository() -> impl Filter<Extract = (Repository,), Error = Rejection> + Clone {
+    auth::authenticate()
+        .and(repository())
+        .and(warp::filters::ext::get::<Arc<auth::Authorizer>>())
+        .and_then(auth::authorize)
 }

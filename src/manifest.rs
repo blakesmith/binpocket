@@ -10,9 +10,8 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
-use crate::auth;
 use crate::error::{ErrorCode, ErrorResponse};
-use crate::repository::{repository, Repository};
+use crate::repository::{authorize_repository, Repository};
 use crate::{digest, digest::deserialize_digest_string};
 
 pub mod protos {
@@ -351,11 +350,7 @@ where
 fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
-        .and(
-            auth::authenticate()
-                .and(repository())
-                .and_then(auth::authorize),
-        )
+        .and(authorize_repository())
         .and(warp::path!("manifests" / String))
         .and(warp::header::<String>("Content-Type"))
         .and(warp::filters::ext::get::<Arc<M>>())
@@ -370,11 +365,7 @@ fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
         .map(|_| ())
         .untuple_one() // Remove the unused method filter.
         .and(warp::method())
-        .and(
-            auth::authenticate()
-                .and(repository())
-                .and_then(auth::authorize),
-        )
+        .and(authorize_repository())
         .and(warp::path!("manifests" / String))
         .and(warp::filters::ext::get::<Arc<M>>())
         .and_then(process_manifest_get_or_head)
