@@ -102,7 +102,7 @@ pub enum AuthorizationError {}
 impl warp::reject::Reject for AuthorizationError {}
 
 pub struct Authorizer {
-    pub web_root: String,
+    pub auth_url: String,
 }
 
 impl Authorizer {
@@ -120,7 +120,7 @@ impl Authorizer {
             );
             error.add_header(
                 HeaderName::from_str(&"WWW-Authenticate").unwrap(),
-                HeaderValue::from_str(&format!("Bearer realm=http://{}", self.web_root)).unwrap(),
+                HeaderValue::from_str(&format!("Bearer realm=\"{}\"", self.auth_url)).unwrap(),
             );
             Err(error.into())
         }

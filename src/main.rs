@@ -27,10 +27,17 @@ use crate::auth::{
     Authenticator, Authorizer, FixedBearerTokenAuthenticator,
 };
 
-fn version_root() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+fn version_root(auth_url: &str) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
+    let realm = auth_url.to_string();
     warp::get()
         .and(warp::path::end())
-        .map(|| StatusCode::OK)
+        .map(move || {
+            warp::http::response::Builder::new()
+                .status(StatusCode::UNAUTHORIZED)
+                .header("WWW-Authenticate", format!("Bearer realm=\"{}\"", realm))
+                .body("")
+                .unwrap()
+        })
         .boxed()
 }
 
@@ -61,13 +68,14 @@ async fn main() {
             }),
         }));
 
+    let auth_url = "http://127.0.0.1:3030/authorize";
     let authorizer = Arc::new(Authorizer {
-        web_root: "127.0.0.1:3030".to_string(),
+        auth_url: auth_url.to_string(),
     });
 
     let routes = warp::path("v2")
         .and(
-            (version_root())
+            (version_root(auth_url))
                 .or(blob::routes::<blob::FsBlobStore>())
                 .or(manifest::routes::<manifest::LmdbManifestStore>()),
         )

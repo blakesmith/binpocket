@@ -9,7 +9,7 @@ pub struct Repository {
 
 impl AuthzTarget for Repository {
     fn visibility(&self) -> Visibility {
-        Visibility::Public
+        Visibility::Private
     }
 }
 
