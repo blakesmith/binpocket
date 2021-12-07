@@ -1,8 +1,15 @@
 pub mod principal;
 
 use async_trait::async_trait;
+use std::str::FromStr;
 use std::sync::Arc;
-use warp::{http::StatusCode, Filter, Rejection};
+use warp::{
+    http::{
+        header::{HeaderName, HeaderValue},
+        StatusCode,
+    },
+    Filter, Rejection,
+};
 
 use self::principal::Principal;
 
@@ -106,12 +113,16 @@ impl Authorizer {
         if principal.is_some() || t.visibility() == Visibility::Public {
             Ok(t)
         } else {
-            Err(ErrorResponse::new(
+            let mut error = ErrorResponse::new(
                 StatusCode::UNAUTHORIZED,
                 ErrorCode::Denied,
                 "Access denied".to_string(),
-            )
-            .into())
+            );
+            error.add_header(
+                HeaderName::from_str(&"WWW-Authenticate").unwrap(),
+                HeaderValue::from_str(&format!("Bearer realm=http://{}", self.web_root)).unwrap(),
+            );
+            Err(error.into())
         }
     }
 }

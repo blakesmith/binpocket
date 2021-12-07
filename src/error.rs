@@ -1,6 +1,12 @@
 use serde::Serialize;
 use std::convert::Infallible;
-use warp::{http::status::StatusCode, Rejection, Reply};
+use warp::{
+    http::{
+        header::{HeaderName, HeaderValue},
+        status::StatusCode,
+    },
+    Rejection, Reply,
+};
 
 #[derive(Debug, Serialize)]
 pub enum ErrorCode {
@@ -36,6 +42,9 @@ pub struct ErrorResponse {
     #[serde(skip_serializing)]
     http_code: StatusCode,
     errors: Vec<ErrorMessage>,
+
+    #[serde(skip_serializing)]
+    headers: Vec<(HeaderName, HeaderValue)>,
 }
 
 impl ErrorResponse {
@@ -47,7 +56,12 @@ impl ErrorResponse {
                 message,
                 detail: "".to_string(),
             }],
+            headers: vec![],
         }
+    }
+
+    pub fn add_header(&mut self, name: HeaderName, value: HeaderValue) {
+        self.headers.push((name, value));
     }
 }
 
@@ -60,32 +74,51 @@ impl warp::reject::Reject for ErrorResponse {}
 
 pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     if err.is_not_found() {
-        Ok(warp::reply::with_status(
-            warp::reply::json(&SimpleError {
-                message: "Not found".to_string(),
-            }),
-            StatusCode::NOT_FOUND,
-        ))
+        Ok(warp::http::response::Builder::new()
+            .status(StatusCode::NOT_FOUND)
+            .body(
+                serde_json::to_vec(&SimpleError {
+                    message: "Not found".to_string(),
+                })
+                .map_err(|err| tracing::error!("JSON failed: {}", err))
+                .unwrap_or_else(|_| vec![]),
+            )
+            .unwrap())
     } else if let Some(err_resp) = err.find::<ErrorResponse>() {
-        Ok(warp::reply::with_status(
-            warp::reply::json(err_resp),
-            err_resp.http_code,
-        ))
+        let mut builder = warp::http::response::Builder::new().status(err_resp.http_code);
+        for (name, value) in &err_resp.headers {
+            builder = builder.header(name.clone(), value.clone());
+        }
+        Ok(builder
+            .body(
+                serde_json::to_vec(err_resp)
+                    .map_err(|err| tracing::error!("JSON failed: {}", err))
+                    .unwrap_or_else(|_| vec![]),
+            )
+            .unwrap())
     } else if let Some(err) = err.find::<warp::reject::MethodNotAllowed>() {
         tracing::debug!("Method not allowed: {:?}", err);
-        Ok(warp::reply::with_status(
-            warp::reply::json(&SimpleError {
-                message: "Method not allowed".to_string(),
-            }),
-            StatusCode::METHOD_NOT_ALLOWED,
-        ))
+        Ok(warp::http::response::Builder::new()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body(
+                serde_json::to_vec(&SimpleError {
+                    message: "Method not allowed".to_string(),
+                })
+                .map_err(|err| tracing::error!("JSON failed: {}", err))
+                .unwrap_or_else(|_| vec![]),
+            )
+            .unwrap())
     } else {
         tracing::error!("Got unhandled error: {:?}", err);
-        Ok(warp::reply::with_status(
-            warp::reply::json(&SimpleError {
-                message: "Something broke".to_string(),
-            }),
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ))
+        Ok(warp::http::response::Builder::new()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(
+                serde_json::to_vec(&SimpleError {
+                    message: "Something broke".to_string(),
+                })
+                .map_err(|err| tracing::error!("JSON failed: {}", err))
+                .unwrap_or_else(|_| vec![]),
+            )
+            .unwrap())
     }
 }
