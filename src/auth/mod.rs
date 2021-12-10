@@ -1,7 +1,7 @@
+pub mod credential;
 pub mod principal;
 
 use async_trait::async_trait;
-use serde::Serialize;
 use std::str::FromStr;
 use std::sync::Arc;
 use warp::{
@@ -12,40 +12,10 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
+use self::credential::{BearerToken, Credential, OAuthAccessTokenResponse};
 use self::principal::Principal;
 
 use crate::error::{ErrorCode, ErrorResponse};
-
-#[derive(Debug)]
-pub enum Credential {
-    BearerToken(String),
-}
-
-impl Credential {
-    pub fn bearer_from_header(header: &str) -> Option<Credential> {
-        match header.split_once("Bearer ") {
-            Some((_, token)) => Some(Credential::BearerToken(token.to_string())),
-            None => None,
-        }
-    }
-}
-
-#[derive(Serialize, Debug)]
-struct OAuthAccessTokenResponse {
-    token: String,
-    access_token: String,
-}
-
-impl From<Credential> for OAuthAccessTokenResponse {
-    fn from(credential: Credential) -> OAuthAccessTokenResponse {
-        match credential {
-            Credential::BearerToken(token) => OAuthAccessTokenResponse {
-                access_token: token.to_string(),
-                token,
-            },
-        }
-    }
-}
 
 #[derive(PartialEq, Debug)]
 pub enum Visibility {
@@ -60,7 +30,7 @@ pub trait AuthzTarget {
 fn authorization_header() -> impl Filter<Extract = (Option<Credential>,), Error = Rejection> + Clone
 {
     warp::header::optional::<String>("Authorization").map(|auth_header: Option<String>| {
-        auth_header.and_then(|h| Credential::bearer_from_header(&h))
+        auth_header.and_then(|h| Credential::bearer_from_str(&h))
     })
 }
 
@@ -90,7 +60,7 @@ pub struct FixedBearerTokenAuthenticator {
 impl Authenticator for FixedBearerTokenAuthenticator {
     async fn authenticate(&self, credential: Credential) -> Result<Principal, AuthenticationError> {
         match credential {
-            Credential::BearerToken(ref token) => {
+            Credential::BearerToken(BearerToken { ref token }) => {
                 if *token == self.token {
                     tracing::debug!("Tokens match. Logged in!");
                     Ok(self.principal.clone())
@@ -129,7 +99,7 @@ fn oauth_access_token() -> impl Filter<Extract = impl Reply, Error = Rejection> 
     warp::get()
         .and(warp::path!("token"))
         .map(|| {
-            let token = Credential::BearerToken("a_global_test_token".to_string());
+            let token = BearerToken::new("a_global_test_token".to_string());
             let oauth_response: OAuthAccessTokenResponse = token.into();
             warp::http::response::Builder::new()
                 .status(StatusCode::OK)
