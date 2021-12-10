@@ -68,7 +68,7 @@ async fn main() {
             }),
         }));
 
-    let auth_url = "http://127.0.0.1:3030/authorize";
+    let auth_url = "http://127.0.0.1:3030/token";
     let authorizer = Arc::new(Authorizer {
         auth_url: auth_url.to_string(),
     });

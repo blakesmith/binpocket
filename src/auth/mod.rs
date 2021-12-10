@@ -36,6 +36,17 @@ struct OAuthAccessTokenResponse {
     access_token: String,
 }
 
+impl From<Credential> for OAuthAccessTokenResponse {
+    fn from(credential: Credential) -> OAuthAccessTokenResponse {
+        match credential {
+            Credential::BearerToken(token) => OAuthAccessTokenResponse {
+                access_token: token.to_string(),
+                token,
+            },
+        }
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub enum Visibility {
     Public,
@@ -114,25 +125,21 @@ pub fn authenticate() -> impl Filter<Extract = (Option<Principal>,), Error = Rej
         .and_then(check_authentication)
 }
 
-fn resource_authorize() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+fn oauth_access_token() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::get()
-        .and(warp::path!("authorize"))
+        .and(warp::path!("token"))
         .map(|| {
+            let token = Credential::BearerToken("a_global_test_token".to_string());
+            let oauth_response: OAuthAccessTokenResponse = token.into();
             warp::http::response::Builder::new()
                 .status(StatusCode::OK)
-                .body(
-                    serde_json::to_string(&OAuthAccessTokenResponse {
-                        token: "a_global_test_token".to_string(),
-                        access_token: "a_global_test_token".to_string(),
-                    })
-                    .unwrap(),
-                )
+                .body(serde_json::to_string(&oauth_response).unwrap())
         })
         .boxed()
 }
 
 pub fn routes() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    resource_authorize()
+    oauth_access_token()
 }
 
 #[derive(Debug)]
