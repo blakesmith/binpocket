@@ -23,6 +23,7 @@ use tracing::metadata::Level;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use crate::auth::{
+    credential::JWTTokenGenerator,
     principal::{Principal, User},
     Authenticator, Authorizer, FixedBearerTokenAuthenticator,
 };
@@ -68,6 +69,8 @@ async fn main() {
             }),
         }));
 
+    let jwt_generator = Arc::new(JWTTokenGenerator {});
+
     let auth_url = "http://127.0.0.1:3030/token";
     let authorizer = Arc::new(Authorizer {
         auth_url: auth_url.to_string(),
@@ -90,6 +93,7 @@ async fn main() {
         .layer(AddExtensionLayer::new(manifest_store))
         .layer(AddExtensionLayer::new(authenticator))
         .layer(AddExtensionLayer::new(authorizer))
+        .layer(AddExtensionLayer::new(jwt_generator))
         .service(warp_service);
     let addr = SocketAddr::from(([0, 0, 0, 0], 3030));
     let listener = TcpListener::bind(addr).unwrap();

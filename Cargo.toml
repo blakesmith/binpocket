@@ -8,6 +8,7 @@ edition = "2018"
 [dependencies]
 async-lock = "2"
 async-trait = "0.1"
+base64 = "0.13"
 bytes = "1.0"
 flatbuffers = "2.0.0"
 futures-util = "0.3"

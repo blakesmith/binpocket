@@ -12,7 +12,7 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
-use self::credential::{BearerToken, Credential, OAuthAccessTokenResponse};
+use self::credential::{BearerToken, Credential, UsernamePassword};
 use self::principal::Principal;
 
 use crate::error::{ErrorCode, ErrorResponse};
@@ -27,10 +27,17 @@ pub trait AuthzTarget {
     fn visibility(&self) -> Visibility;
 }
 
-fn authorization_header() -> impl Filter<Extract = (Option<Credential>,), Error = Rejection> + Clone
-{
+fn authorization_bearer_header(
+) -> impl Filter<Extract = (Option<Credential>,), Error = Rejection> + Clone {
     warp::header::optional::<String>("Authorization").map(|auth_header: Option<String>| {
-        auth_header.and_then(|h| Credential::bearer_from_str(&h))
+        auth_header.and_then(|h| Credential::bearer_from_header(&h))
+    })
+}
+
+fn authorization_basic_header(
+) -> impl Filter<Extract = (Option<Credential>,), Error = Rejection> + Clone {
+    warp::header::optional::<String>("Authorization").map(|auth_header: Option<String>| {
+        auth_header.and_then(|h| Credential::basic_from_header(&h))
     })
 }
 
@@ -60,7 +67,22 @@ pub struct FixedBearerTokenAuthenticator {
 impl Authenticator for FixedBearerTokenAuthenticator {
     async fn authenticate(&self, credential: Credential) -> Result<Principal, AuthenticationError> {
         match credential {
+            Credential::UsernamePassword(UsernamePassword {
+                ref username,
+                ref password,
+            }) => {
+                // TODO: Hack: Just match tokens directly for now
+                // swap this out for real username / password verification
+                if *password == self.token {
+                    tracing::debug!("Username / password credentials match. Authenticated!");
+                    Ok(self.principal.clone())
+                } else {
+                    tracing::debug!("Invalid username / password credentials");
+                    Err(AuthenticationError::InvalidCredentials)
+                }
+            }
             Credential::BearerToken(BearerToken { ref token }) => {
+                // TODO: Replace with JWT token verification
                 if *token == self.token {
                     tracing::debug!("Tokens match. Logged in!");
                     Ok(self.principal.clone())
@@ -89,27 +111,23 @@ async fn check_authentication(
     }
 }
 
+/// By default: Almost all endpoints must authenticate with a Bearer
+/// token.
 pub fn authenticate() -> impl Filter<Extract = (Option<Principal>,), Error = Rejection> + Clone {
     warp::filters::ext::get::<Arc<Box<dyn Authenticator>>>()
-        .and(authorization_header())
+        .and(authorization_bearer_header())
         .and_then(check_authentication)
 }
 
-fn oauth_access_token() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    warp::get()
-        .and(warp::path!("token"))
-        .map(|| {
-            let token = BearerToken::new("a_global_test_token".to_string());
-            let oauth_response: OAuthAccessTokenResponse = token.into();
-            warp::http::response::Builder::new()
-                .status(StatusCode::OK)
-                .body(serde_json::to_string(&oauth_response).unwrap())
-        })
-        .boxed()
+pub fn authenticate_basic() -> impl Filter<Extract = (Option<Principal>,), Error = Rejection> + Clone
+{
+    warp::filters::ext::get::<Arc<Box<dyn Authenticator>>>()
+        .and(authorization_basic_header())
+        .and_then(check_authentication)
 }
 
 pub fn routes() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    oauth_access_token()
+    credential::oauth_access_token()
 }
 
 #[derive(Debug)]
