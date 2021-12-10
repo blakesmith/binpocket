@@ -1,6 +1,7 @@
 pub mod principal;
 
 use async_trait::async_trait;
+use serde::Serialize;
 use std::str::FromStr;
 use std::sync::Arc;
 use warp::{
@@ -8,15 +9,31 @@ use warp::{
         header::{HeaderName, HeaderValue},
         StatusCode,
     },
-    Filter, Rejection,
+    Filter, Rejection, Reply,
 };
 
 use self::principal::Principal;
 
 use crate::error::{ErrorCode, ErrorResponse};
 
+#[derive(Debug)]
 pub enum Credential {
     BearerToken(String),
+}
+
+impl Credential {
+    pub fn bearer_from_header(header: &str) -> Option<Credential> {
+        match header.split_once("Bearer ") {
+            Some((_, token)) => Some(Credential::BearerToken(token.to_string())),
+            None => None,
+        }
+    }
+}
+
+#[derive(Serialize, Debug)]
+struct OAuthAccessTokenResponse {
+    token: String,
+    access_token: String,
 }
 
 #[derive(PartialEq, Debug)]
@@ -31,8 +48,9 @@ pub trait AuthzTarget {
 
 fn authorization_header() -> impl Filter<Extract = (Option<Credential>,), Error = Rejection> + Clone
 {
-    warp::header::optional::<String>("Authorization")
-        .map(|auth_token: Option<String>| auth_token.map(Credential::BearerToken))
+    warp::header::optional::<String>("Authorization").map(|auth_header: Option<String>| {
+        auth_header.and_then(|h| Credential::bearer_from_header(&h))
+    })
 }
 
 #[derive(Debug)]
@@ -61,12 +79,12 @@ pub struct FixedBearerTokenAuthenticator {
 impl Authenticator for FixedBearerTokenAuthenticator {
     async fn authenticate(&self, credential: Credential) -> Result<Principal, AuthenticationError> {
         match credential {
-            Credential::BearerToken(token) => {
-                if token == self.token {
+            Credential::BearerToken(ref token) => {
+                if *token == self.token {
                     tracing::debug!("Tokens match. Logged in!");
                     Ok(self.principal.clone())
                 } else {
-                    tracing::debug!("Bearer token credentials don't match");
+                    tracing::debug!("Bearer token credentials don't match: {:?}", credential);
                     Err(AuthenticationError::InvalidCredentials)
                 }
             }
@@ -94,6 +112,27 @@ pub fn authenticate() -> impl Filter<Extract = (Option<Principal>,), Error = Rej
     warp::filters::ext::get::<Arc<Box<dyn Authenticator>>>()
         .and(authorization_header())
         .and_then(check_authentication)
+}
+
+fn resource_authorize() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::get()
+        .and(warp::path!("authorize"))
+        .map(|| {
+            warp::http::response::Builder::new()
+                .status(StatusCode::OK)
+                .body(
+                    serde_json::to_string(&OAuthAccessTokenResponse {
+                        token: "a_global_test_token".to_string(),
+                        access_token: "a_global_test_token".to_string(),
+                    })
+                    .unwrap(),
+                )
+        })
+        .boxed()
+}
+
+pub fn routes() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    resource_authorize()
 }
 
 #[derive(Debug)]

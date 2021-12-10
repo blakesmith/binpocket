@@ -73,12 +73,12 @@ async fn main() {
         auth_url: auth_url.to_string(),
     });
 
-    let routes = warp::path("v2")
-        .and(
+    let routes = auth::routes()
+        .or(warp::path("v2").and(
             (version_root(auth_url))
                 .or(blob::routes::<blob::FsBlobStore>())
                 .or(manifest::routes::<manifest::LmdbManifestStore>()),
-        )
+        ))
         .recover(error::handle_rejection);
 
     let warp_service = warp::service(routes);
