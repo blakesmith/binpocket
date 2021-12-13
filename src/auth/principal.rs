@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 /// serialized / deserialized inside an
 /// authenticated JWT token.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UserClaims<'user> {
-    pub username: &'user str,
+pub struct UserClaims {
+    pub username: String,
 }
 
 #[derive(Debug, Clone)]
@@ -13,10 +13,10 @@ pub struct User {
     pub name: String,
 }
 
-impl<'user> From<&'user User> for UserClaims<'user> {
+impl From<&User> for UserClaims {
     fn from(user: &User) -> UserClaims {
         UserClaims {
-            username: &user.name,
+            username: user.name.clone(),
         }
     }
 }

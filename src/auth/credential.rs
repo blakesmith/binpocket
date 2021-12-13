@@ -1,4 +1,5 @@
 use jwt_simple::algorithms::ES256KeyPair;
+use jwt_simple::prelude::*;
 use serde::Serialize;
 use std::sync::Arc;
 use warp::{
@@ -9,7 +10,7 @@ use warp::{
 use crate::error::{ErrorCode, ErrorResponse};
 
 use super::authenticate_basic;
-use super::principal::Principal;
+use super::principal::{Principal, UserClaims};
 
 #[derive(Debug, PartialEq)]
 pub struct BearerToken {
@@ -91,9 +92,34 @@ pub(crate) struct JWTTokenGenerator {
     issuer: String,
 }
 
+#[derive(Debug)]
+pub(crate) enum TokenGenerationError {
+    JWT(jwt_simple::Error),
+}
+
+impl From<jwt_simple::Error> for TokenGenerationError {
+    fn from(err: jwt_simple::Error) -> Self {
+        Self::JWT(err)
+    }
+}
+
+impl warp::reject::Reject for TokenGenerationError {}
+
 impl JWTTokenGenerator {
-    pub fn generate_bearer_token(&self, _principal: &Principal) -> BearerToken {
-        BearerToken::new("a_global_test_token".to_string())
+    pub fn generate_bearer_token(
+        &self,
+        principal: &Principal,
+    ) -> Result<BearerToken, TokenGenerationError> {
+        match principal {
+            Principal::User(user) => {
+                let user_claims = UserClaims::from(user);
+                let claims = Claims::with_custom_claims(user_claims, Duration::from_mins(30))
+                    .with_issuer(&self.issuer)
+                    .with_subject("binpocket_repo_auth");
+                let raw_token = self.key_pair.sign(claims)?;
+                Ok(BearerToken::new(raw_token))
+            }
+        }
     }
 
     pub fn new(key_pair: ES256KeyPair, issuer: &str) -> Self {
@@ -110,7 +136,7 @@ async fn access_token_response(
 ) -> Result<Response<Vec<u8>>, Rejection> {
     match principal {
         Some(p) => {
-            let token = jwt_generator.generate_bearer_token(&p);
+            let token = jwt_generator.generate_bearer_token(&p)?;
             let oauth_response = OAuthAccessTokenResponse::from(&token);
             Ok(warp::http::response::Builder::new()
                 .status(StatusCode::OK)
