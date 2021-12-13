@@ -2,6 +2,7 @@ mod auth;
 mod blob;
 mod digest;
 mod error;
+use jwt_simple::algorithms::ES256KeyPair;
 mod manifest;
 mod range;
 mod repository;
@@ -69,7 +70,8 @@ async fn main() {
             }),
         }));
 
-    let jwt_generator = Arc::new(JWTTokenGenerator {});
+    let key_pair = ES256KeyPair::generate(); // TODO: Save it somewhere stable
+    let jwt_generator = Arc::new(JWTTokenGenerator::new(key_pair, "binpocket"));
 
     let auth_url = "http://127.0.0.1:3030/token";
     let authorizer = Arc::new(Authorizer {

@@ -1,3 +1,4 @@
+use jwt_simple::algorithms::ES256KeyPair;
 use serde::Serialize;
 use std::sync::Arc;
 use warp::{
@@ -71,25 +72,35 @@ impl Credential {
 /// is also present for compatibility, and must always match the
 /// token value.
 #[derive(Serialize, Debug)]
-struct OAuthAccessTokenResponse {
-    token: String,
-    access_token: String,
+struct OAuthAccessTokenResponse<'token> {
+    token: &'token str,
+    access_token: &'token str,
 }
 
-impl From<BearerToken> for OAuthAccessTokenResponse {
-    fn from(bearer_token: BearerToken) -> OAuthAccessTokenResponse {
+impl<'token> From<&'token BearerToken> for OAuthAccessTokenResponse<'token> {
+    fn from(bearer_token: &'token BearerToken) -> OAuthAccessTokenResponse<'token> {
         OAuthAccessTokenResponse {
-            access_token: bearer_token.token.clone(),
-            token: bearer_token.token.clone(),
+            access_token: &bearer_token.token,
+            token: &bearer_token.token,
         }
     }
 }
 
-pub(crate) struct JWTTokenGenerator {}
+pub(crate) struct JWTTokenGenerator {
+    key_pair: ES256KeyPair,
+    issuer: String,
+}
 
 impl JWTTokenGenerator {
     pub fn generate_bearer_token(&self, _principal: &Principal) -> BearerToken {
         BearerToken::new("a_global_test_token".to_string())
+    }
+
+    pub fn new(key_pair: ES256KeyPair, issuer: &str) -> Self {
+        Self {
+            key_pair,
+            issuer: issuer.to_string(),
+        }
     }
 }
 
@@ -100,7 +111,7 @@ async fn access_token_response(
     match principal {
         Some(p) => {
             let token = jwt_generator.generate_bearer_token(&p);
-            let oauth_response: OAuthAccessTokenResponse = token.into();
+            let oauth_response = OAuthAccessTokenResponse::from(&token);
             Ok(warp::http::response::Builder::new()
                 .status(StatusCode::OK)
                 .body(serde_json::to_vec(&oauth_response).unwrap())
