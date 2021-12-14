@@ -146,6 +146,8 @@ pub fn authenticate() -> impl Filter<Extract = (Option<Principal>,), Error = Rej
         .and_then(check_authentication)
 }
 
+/// Username / password authentication is only supported on the '/token' endpoint
+/// as a way to exchange a username password for a JWT bearer token.
 pub fn authenticate_basic() -> impl Filter<Extract = (Option<Principal>,), Error = Rejection> + Clone
 {
     warp::filters::ext::get::<Arc<Box<dyn Authenticator>>>()
