@@ -12,6 +12,8 @@ use crate::error::{ErrorCode, ErrorResponse};
 use super::authenticate_basic;
 use super::principal::{Principal, UserClaims};
 
+/// An encoded JWT token. Must be decoded and verified
+/// before being accepted as a valid credential.
 #[derive(Debug, PartialEq)]
 pub struct JWTToken {
     pub token: String,
