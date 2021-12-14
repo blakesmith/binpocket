@@ -13,11 +13,11 @@ use super::authenticate_basic;
 use super::principal::{Principal, UserClaims};
 
 #[derive(Debug, PartialEq)]
-pub struct BearerToken {
+pub struct JWTToken {
     pub token: String,
 }
 
-impl BearerToken {
+impl JWTToken {
     pub fn new(token: String) -> Self {
         Self { token }
     }
@@ -37,7 +37,7 @@ impl UsernamePassword {
 
 #[derive(Debug, PartialEq)]
 pub enum Credential {
-    BearerToken(BearerToken),
+    JWTToken(JWTToken),
     UsernamePassword(UsernamePassword),
 }
 
@@ -45,7 +45,7 @@ impl Credential {
     /// Extract a bearer token from a header value.
     pub fn bearer_from_header(header: &str) -> Option<Credential> {
         match header.split_once("Bearer ") {
-            Some((_, token)) => Some(Credential::BearerToken(BearerToken::new(token.to_string()))),
+            Some((_, token)) => Some(Credential::JWTToken(JWTToken::new(token.to_string()))),
             None => None,
         }
     }
@@ -78,8 +78,8 @@ struct OAuthAccessTokenResponse<'token> {
     access_token: &'token str,
 }
 
-impl<'token> From<&'token BearerToken> for OAuthAccessTokenResponse<'token> {
-    fn from(bearer_token: &'token BearerToken) -> OAuthAccessTokenResponse<'token> {
+impl<'token> From<&'token JWTToken> for OAuthAccessTokenResponse<'token> {
+    fn from(bearer_token: &'token JWTToken) -> OAuthAccessTokenResponse<'token> {
         OAuthAccessTokenResponse {
             access_token: &bearer_token.token,
             token: &bearer_token.token,
@@ -109,7 +109,7 @@ impl JWTTokenGenerator {
     pub fn generate_bearer_token(
         &self,
         principal: &Principal,
-    ) -> Result<BearerToken, TokenGenerationError> {
+    ) -> Result<JWTToken, TokenGenerationError> {
         match principal {
             Principal::User(user) => {
                 let user_claims = UserClaims::from(user);
@@ -117,7 +117,7 @@ impl JWTTokenGenerator {
                     .with_issuer(&self.issuer)
                     .with_subject("binpocket_repo_auth");
                 let raw_token = self.key_pair.sign(claims)?;
-                Ok(BearerToken::new(raw_token))
+                Ok(JWTToken::new(raw_token))
             }
         }
     }

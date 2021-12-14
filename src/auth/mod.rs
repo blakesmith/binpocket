@@ -14,7 +14,7 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
-use self::credential::{BearerToken, Credential, UsernamePassword};
+use self::credential::{Credential, JWTToken, UsernamePassword};
 use self::principal::{Principal, User, UserClaims};
 
 use crate::error::{ErrorCode, ErrorResponse};
@@ -109,7 +109,7 @@ impl Authenticator for FixedPrincipalAuthenticator {
                 })
                 .ok_or(AuthenticationError::InvalidCredentials)
                 .map(|user| Principal::User(user.clone())),
-            Credential::BearerToken(BearerToken { ref token }) => {
+            Credential::JWTToken(JWTToken { ref token }) => {
                 let claims = self
                     .jwt_public_key
                     .verify_token::<UserClaims>(token, None)?;
