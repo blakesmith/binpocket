@@ -1,4 +1,4 @@
-use jwt_simple::algorithms::ES256KeyPair;
+use jwt_simple::algorithms::{ES256KeyPair, ES256PublicKey};
 use jwt_simple::prelude::*;
 use serde::Serialize;
 use std::sync::Arc;
@@ -127,6 +127,10 @@ impl JWTTokenGenerator {
             key_pair,
             issuer: issuer.to_string(),
         }
+    }
+
+    pub fn public_key(&self) -> ES256PublicKey {
+        self.key_pair.public_key()
     }
 }
 

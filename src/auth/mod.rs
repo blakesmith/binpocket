@@ -2,6 +2,8 @@ pub mod credential;
 pub mod principal;
 
 use async_trait::async_trait;
+use jwt_simple::algorithms::{ECDSAP256PublicKeyLike, ES256PublicKey};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use warp::{
@@ -13,7 +15,7 @@ use warp::{
 };
 
 use self::credential::{BearerToken, Credential, UsernamePassword};
-use self::principal::Principal;
+use self::principal::{Principal, User, UserClaims};
 
 use crate::error::{ErrorCode, ErrorResponse};
 
@@ -43,8 +45,15 @@ fn authorization_basic_header(
 
 #[derive(Debug)]
 pub enum AuthenticationError {
+    JWT(jwt_simple::Error),
     InvalidCredentials,
-    UnknownCredentialType,
+    MissingUser,
+}
+
+impl From<jwt_simple::Error> for AuthenticationError {
+    fn from(err: jwt_simple::Error) -> AuthenticationError {
+        AuthenticationError::JWT(err)
+    }
 }
 
 impl warp::reject::Reject for AuthenticationError {}
@@ -56,40 +65,58 @@ pub trait Authenticator: Send + Sync {
     async fn authenticate(&self, credential: Credential) -> Result<Principal, AuthenticationError>;
 }
 
-/// Authenticator that authenticates on a global bearer token, in exchange
-/// for a given Principal.
-pub struct FixedBearerTokenAuthenticator {
-    pub token: String,
-    pub principal: Principal,
+/// Authenticator that authenticates with simple in-memory
+/// passwords only, in exchange for users.
+pub struct FixedPrincipalAuthenticator {
+    jwt_public_key: ES256PublicKey,
+    user_passwords: HashMap<String, String>,
+    users_by_username: HashMap<String, User>,
+}
+
+impl FixedPrincipalAuthenticator {
+    pub fn new(jwt_public_key: ES256PublicKey) -> Self {
+        Self {
+            jwt_public_key,
+            user_passwords: HashMap::new(),
+            users_by_username: HashMap::new(),
+        }
+    }
+
+    pub fn add_user(&mut self, user: User, password: &str) {
+        self.user_passwords
+            .insert(user.name.to_string(), password.to_string());
+        self.users_by_username.insert(user.name.to_string(), user);
+    }
 }
 
 #[async_trait]
-impl Authenticator for FixedBearerTokenAuthenticator {
+impl Authenticator for FixedPrincipalAuthenticator {
     async fn authenticate(&self, credential: Credential) -> Result<Principal, AuthenticationError> {
         match credential {
             Credential::UsernamePassword(UsernamePassword {
                 ref username,
                 ref password,
-            }) => {
-                // TODO: Hack: Just match tokens directly for now
-                // swap this out for real username / password verification
-                if *password == self.token {
-                    tracing::debug!("Username / password credentials match. Authenticated!");
-                    Ok(self.principal.clone())
-                } else {
-                    tracing::debug!("Invalid username / password credentials");
-                    Err(AuthenticationError::InvalidCredentials)
-                }
-            }
+            }) => self
+                .user_passwords
+                .get(username)
+                .and_then(|pw| {
+                    if pw == password {
+                        self.users_by_username.get(username)
+                    } else {
+                        tracing::debug!("Invalid password for username: {}", username);
+                        None
+                    }
+                })
+                .ok_or(AuthenticationError::InvalidCredentials)
+                .map(|user| Principal::User(user.clone())),
             Credential::BearerToken(BearerToken { ref token }) => {
-                // TODO: Replace with JWT token verification
-                if *token == self.token {
-                    tracing::debug!("Tokens match. Logged in!");
-                    Ok(self.principal.clone())
-                } else {
-                    tracing::debug!("Bearer token credentials don't match: {:?}", credential);
-                    Err(AuthenticationError::InvalidCredentials)
-                }
+                let claims = self
+                    .jwt_public_key
+                    .verify_token::<UserClaims>(token, None)?;
+                self.users_by_username
+                    .get(&claims.custom.username)
+                    .map(|user| Principal::User(user.clone()))
+                    .ok_or(AuthenticationError::MissingUser)
             }
         }
     }

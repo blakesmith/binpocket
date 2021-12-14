@@ -24,9 +24,8 @@ use tracing::metadata::Level;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use crate::auth::{
-    credential::JWTTokenGenerator,
-    principal::{Principal, User},
-    Authenticator, Authorizer, FixedBearerTokenAuthenticator,
+    credential::JWTTokenGenerator, principal::User, Authenticator, Authorizer,
+    FixedPrincipalAuthenticator,
 };
 
 fn version_root(auth_url: &str) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
@@ -62,16 +61,17 @@ async fn main() {
     let manifest_store =
         Arc::new(LmdbManifestStore::open(env).expect("Could not open manifest LMDB database"));
 
-    let authenticator: Arc<Box<dyn Authenticator>> =
-        Arc::new(Box::new(FixedBearerTokenAuthenticator {
-            token: "a_global_test_token".to_string(),
-            principal: Principal::User(User {
-                name: "global_admin".to_string(),
-            }),
-        }));
-
     let key_pair = ES256KeyPair::generate(); // TODO: Save it somewhere stable
     let jwt_generator = Arc::new(JWTTokenGenerator::new(key_pair, "binpocket"));
+
+    let mut fixed_authenticator = FixedPrincipalAuthenticator::new(jwt_generator.public_key());
+    fixed_authenticator.add_user(
+        User {
+            name: "fixed".to_string(),
+        },
+        "a_global_test_token",
+    );
+    let authenticator: Arc<Box<dyn Authenticator>> = Arc::new(Box::new(fixed_authenticator));
 
     let auth_url = "http://127.0.0.1:3030/token";
     let authorizer = Arc::new(Authorizer {
