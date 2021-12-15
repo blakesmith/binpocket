@@ -26,6 +26,7 @@ pub struct Config {
     pub jwt_issuer: String,
     pub web_root: String,
     pub listen_port: u16,
+    pub users: Vec<(String, String)>,
 }
 
 pub struct Binpocket {}
@@ -82,7 +83,7 @@ impl Binpocket {
         let blob_store = Arc::new(blob::FsBlobStore::open(blob_path)?);
 
         let lmdb_path = config.data_path.join("lmdb");
-        tokio::fs::create_dir(&lmdb_path).await?;
+        tokio::fs::create_dir_all(&lmdb_path).await?;
         let env = Arc::new(lmdb::Environment::new().set_max_dbs(5).open(&lmdb_path)?);
         let manifest_store = Arc::new(LmdbManifestStore::open(env)?);
 
@@ -90,12 +91,9 @@ impl Binpocket {
         let jwt_generator = Arc::new(JWTTokenGenerator::new(key_pair, &config.jwt_issuer));
 
         let mut fixed_authenticator = FixedPrincipalAuthenticator::new(jwt_generator.public_key());
-        fixed_authenticator.add_user(
-            User {
-                name: "fixed".to_string(),
-            },
-            "a_global_test_token",
-        );
+        for (user, password) in &config.users {
+            fixed_authenticator.add_user(User { name: user.clone() }, password);
+        }
         let authenticator: Arc<Box<dyn Authenticator>> = Arc::new(Box::new(fixed_authenticator));
 
         let auth_url = format!("{}/token", config.web_root);

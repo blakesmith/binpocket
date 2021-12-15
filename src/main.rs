@@ -22,6 +22,7 @@ async fn main() {
         jwt_issuer: "binpocket".to_string(),
         web_root: "http://127.0.0.1:3030".to_string(),
         listen_port: 3030,
+        users: vec![("fixed".to_string(), "a_global_test_token".to_string())],
     };
     Binpocket::serve(&config)
         .await
