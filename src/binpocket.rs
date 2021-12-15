@@ -27,12 +27,33 @@ pub struct Binpocket {}
 
 #[derive(Debug)]
 pub enum BinpocketError {
+    Io(std::io::Error),
+    Lmdb(lmdb::Error),
     Hyper(hyper::Error),
+    Manifest(manifest::ManifestStoreError),
 }
 
 impl From<hyper::Error> for BinpocketError {
     fn from(err: hyper::Error) -> Self {
         Self::Hyper(err)
+    }
+}
+
+impl From<std::io::Error> for BinpocketError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
+impl From<manifest::ManifestStoreError> for BinpocketError {
+    fn from(err: manifest::ManifestStoreError) -> Self {
+        Self::Manifest(err)
+    }
+}
+
+impl From<lmdb::Error> for BinpocketError {
+    fn from(err: lmdb::Error) -> Self {
+        Self::Lmdb(err)
     }
 }
 
@@ -52,18 +73,14 @@ fn version_root(auth_url: &str) -> impl Filter<Extract = (impl Reply,), Error = 
 
 impl Binpocket {
     pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
-        let blob_store = Arc::new(
-            blob::FsBlobStore::open(PathBuf::from("/tmp/oci")).expect("Could not open blob store"),
-        );
+        let blob_store = Arc::new(blob::FsBlobStore::open(PathBuf::from("/tmp/oci"))?);
 
         let env = Arc::new(
             lmdb::Environment::new()
                 .set_max_dbs(5)
-                .open(&PathBuf::from("/tmp/lmdb_data"))
-                .expect("Could not open LMDB database"),
+                .open(&PathBuf::from("/tmp/lmdb_data"))?,
         );
-        let manifest_store =
-            Arc::new(LmdbManifestStore::open(env).expect("Could not open manifest LMDB database"));
+        let manifest_store = Arc::new(LmdbManifestStore::open(env)?);
 
         let key_pair = ES256KeyPair::generate(); // TODO: Save it somewhere stable
         let jwt_generator = Arc::new(JWTTokenGenerator::new(key_pair, "binpocket"));
