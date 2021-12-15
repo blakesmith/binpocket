@@ -7,7 +7,7 @@ mod manifest;
 mod range;
 mod repository;
 
-use binpocket::{Binpocket, Config};
+use binpocket::Config;
 use std::path::PathBuf;
 use tracing::metadata::Level;
 
@@ -24,7 +24,7 @@ async fn main() {
         listen_port: 3030,
         users: vec![("fixed".to_string(), "a_global_test_token".to_string())],
     };
-    Binpocket::serve(&config)
+    binpocket::serve(&config)
         .await
         .expect("Could not serve binpocket");
 }
