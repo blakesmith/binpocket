@@ -1,6 +1,7 @@
 use hyper::Server;
 use jwt_simple::algorithms::ES256KeyPair;
 use manifest::LmdbManifestStore;
+use serde::Deserialize;
 use std::{
     net::{SocketAddr, TcpListener},
     path::PathBuf,
@@ -21,12 +22,19 @@ use crate::auth::{
 };
 use crate::{blob, error, manifest};
 
+#[derive(Deserialize)]
+pub struct UserConfig {
+    username: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
 pub struct Config {
     pub data_path: PathBuf,
     pub jwt_issuer: String,
     pub web_root: String,
     pub listen_port: u16,
-    pub users: Vec<(String, String)>,
+    pub users: Vec<UserConfig>,
 }
 
 #[derive(Debug)]
@@ -88,8 +96,13 @@ pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
     let jwt_generator = Arc::new(JWTTokenGenerator::new(key_pair, &config.jwt_issuer));
 
     let mut fixed_authenticator = FixedPrincipalAuthenticator::new(jwt_generator.public_key());
-    for (user, password) in &config.users {
-        fixed_authenticator.add_user(User { name: user.clone() }, password);
+    for user_config in &config.users {
+        fixed_authenticator.add_user(
+            User {
+                name: user_config.username.clone(),
+            },
+            &user_config.password,
+        );
     }
     let authenticator: Arc<Box<dyn Authenticator>> = Arc::new(Box::new(fixed_authenticator));
 

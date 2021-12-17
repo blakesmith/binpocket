@@ -1,0 +1,7 @@
+data_path: /tmp/binpocket
+jwt_issuer: binpocket
+web_root: http://127.0.0.1:3030
+listen_port: 3030
+users:
+  - username: fixed
+    password: a_global_test_token

@@ -8,8 +8,17 @@ mod range;
 mod repository;
 
 use binpocket::Config;
-use std::path::PathBuf;
+use clap::Parser;
 use tracing::metadata::Level;
+
+/// Run the binpocket server.
+#[derive(Parser)]
+#[clap(about, version, author)]
+struct CmdOpts {
+    /// Path to the YAML service configuration
+    #[clap(short = 'c', long = "config", default_value = "binpocket.yaml")]
+    config: String,
+}
 
 #[tokio::main]
 async fn main() {
@@ -17,13 +26,12 @@ async fn main() {
         .with_max_level(Level::DEBUG)
         .init();
 
-    let config = Config {
-        data_path: PathBuf::from("/tmp/binpocket"),
-        jwt_issuer: "binpocket".to_string(),
-        web_root: "http://127.0.0.1:3030".to_string(),
-        listen_port: 3030,
-        users: vec![("fixed".to_string(), "a_global_test_token".to_string())],
-    };
+    let opts = CmdOpts::parse();
+
+    tracing::info!("Loading configuration from: {}", opts.config);
+    let file = std::fs::File::open(&opts.config).expect("Could not open configuration file");
+    let config: Config =
+        serde_yaml::from_reader(file).expect("Could not deserialize configuration");
     binpocket::serve(&config)
         .await
         .expect("Could not serve binpocket");
