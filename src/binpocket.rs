@@ -73,12 +73,17 @@ fn version_root(auth_url: &str) -> impl Filter<Extract = (impl Reply,), Error = 
     let realm = auth_url.to_string();
     warp::get()
         .and(warp::path::end())
-        .map(move || {
-            warp::http::response::Builder::new()
+        .and(auth::authenticate())
+        .map(move |user| match user {
+            None => warp::http::response::Builder::new()
                 .status(StatusCode::UNAUTHORIZED)
                 .header("WWW-Authenticate", format!("Bearer realm=\"{}\"", realm))
                 .body("")
-                .unwrap()
+                .unwrap(),
+            Some(_) => warp::http::response::Builder::new()
+                .status(StatusCode::OK)
+                .body("")
+                .unwrap(),
         })
         .boxed()
 }
