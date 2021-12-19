@@ -17,7 +17,7 @@ use warp::{
 
 use self::credential::{Credential, JWTToken, UsernamePassword};
 use self::principal::{Principal, User, UserClaims};
-use self::resource::{Action, Resource};
+use self::resource::{Action, Resource, Scope};
 
 use crate::error::{ErrorCode, ErrorResponse};
 
@@ -175,13 +175,22 @@ impl Authorizer {
     pub fn authorize<T>(
         &self,
         principal: Option<Principal>,
-        _action: Action,
+        action: Action,
         t: T,
     ) -> Result<T, Rejection>
     where
         T: AuthzTarget,
     {
-        if principal.is_some() || t.visibility() == Visibility::Public {
+        let authorized = if let Some(principal) = principal {
+            principal.has_scope(&Scope {
+                action,
+                resource: t.resource(),
+            })
+        } else {
+            t.visibility() == Visibility::Public
+        };
+
+        if authorized {
             Ok(t)
         } else {
             let mut error = ErrorResponse::new(

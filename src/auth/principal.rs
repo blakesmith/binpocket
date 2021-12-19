@@ -28,3 +28,14 @@ impl From<&User> for UserClaims {
 pub enum Principal {
     User(User),
 }
+
+impl Principal {
+    pub fn has_scope(&self, required_scope: &Scope) -> bool {
+        match self {
+            Principal::User(user) => user
+                .global_scopes
+                .iter()
+                .any(|scope| scope == required_scope),
+        }
+    }
+}
