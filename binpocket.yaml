@@ -5,3 +5,8 @@ listen_port: 3030
 users:
   - username: fixed
     password: a_global_test_token
+    global_scopes:
+      - action: Read
+        resource: Repository
+      - action: Write
+        resource: Repository

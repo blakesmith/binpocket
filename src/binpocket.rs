@@ -17,8 +17,8 @@ use tracing::metadata::Level;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 use crate::auth::{
-    self, credential::JWTTokenGenerator, principal::User, Authenticator, Authorizer,
-    FixedPrincipalAuthenticator,
+    self, credential::JWTTokenGenerator, principal::User, resource::Scope, Authenticator,
+    Authorizer, FixedPrincipalAuthenticator,
 };
 use crate::{blob, error, manifest};
 
@@ -26,6 +26,7 @@ use crate::{blob, error, manifest};
 pub struct UserConfig {
     username: String,
     password: String,
+    global_scopes: Vec<Scope>,
 }
 
 #[derive(Deserialize)]
@@ -105,6 +106,7 @@ pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
         fixed_authenticator.add_user(
             User {
                 name: user_config.username.clone(),
+                global_scopes: user_config.global_scopes.clone(),
             },
             &user_config.password,
         );

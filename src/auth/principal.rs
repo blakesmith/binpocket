@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::resource::Scope;
+
 /// These are used as JWT claims, and are
 /// serialized / deserialized inside an
 /// authenticated JWT token.
@@ -11,6 +13,7 @@ pub struct UserClaims {
 #[derive(Debug, Clone)]
 pub struct User {
     pub name: String,
+    pub global_scopes: Vec<Scope>,
 }
 
 impl From<&User> for UserClaims {
