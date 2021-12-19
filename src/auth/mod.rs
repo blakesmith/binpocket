@@ -1,5 +1,6 @@
 pub mod credential;
 pub mod principal;
+pub mod resource;
 
 use async_trait::async_trait;
 use jwt_simple::algorithms::{ECDSAP256PublicKeyLike, ES256PublicKey};
@@ -16,6 +17,7 @@ use warp::{
 
 use self::credential::{Credential, JWTToken, UsernamePassword};
 use self::principal::{Principal, User, UserClaims};
+use self::resource::{Action, Resource};
 
 use crate::error::{ErrorCode, ErrorResponse};
 
@@ -27,6 +29,7 @@ pub enum Visibility {
 
 pub trait AuthzTarget {
     fn visibility(&self) -> Visibility;
+    fn resource(&self) -> Resource;
 }
 
 fn authorization_bearer_header(
@@ -169,7 +172,12 @@ pub struct Authorizer {
 }
 
 impl Authorizer {
-    pub fn authorize<T>(&self, principal: Option<Principal>, t: T) -> Result<T, Rejection>
+    pub fn authorize<T>(
+        &self,
+        principal: Option<Principal>,
+        _action: Action,
+        t: T,
+    ) -> Result<T, Rejection>
     where
         T: AuthzTarget,
     {
@@ -193,10 +201,11 @@ impl Authorizer {
 pub async fn authorize<T>(
     principal: Option<Principal>,
     t: T,
+    action: Action,
     authorizer: Arc<Authorizer>,
 ) -> Result<T, Rejection>
 where
     T: AuthzTarget,
 {
-    authorizer.authorize(principal, t)
+    authorizer.authorize(principal, action, t)
 }

@@ -1,4 +1,8 @@
-use crate::auth::{self, AuthzTarget, Visibility};
+use crate::auth::{
+    self,
+    resource::{Action, Resource},
+    AuthzTarget, Visibility,
+};
 use std::sync::Arc;
 use warp::{Filter, Rejection};
 
@@ -11,6 +15,10 @@ impl AuthzTarget for Repository {
     fn visibility(&self) -> Visibility {
         Visibility::Private
     }
+
+    fn resource(&self) -> Resource {
+        Resource::Repository
+    }
 }
 
 pub fn repository() -> impl Filter<Extract = (Repository,), Error = Rejection> + Clone {
@@ -22,9 +30,13 @@ pub fn repository() -> impl Filter<Extract = (Repository,), Error = Rejection> +
         .boxed()
 }
 
-pub fn authorize_repository() -> impl Filter<Extract = (Repository,), Error = Rejection> + Clone {
+pub fn authorize_repository(
+    action: Action,
+) -> impl Filter<Extract = (Repository,), Error = Rejection> + Clone {
     auth::authenticate()
         .and(repository())
         .and(warp::filters::ext::get::<Arc<auth::Authorizer>>())
-        .and_then(auth::authorize)
+        .and_then(move |principal, repo, authorizer| {
+            auth::authorize(principal, repo, action, authorizer)
+        })
 }

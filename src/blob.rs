@@ -27,6 +27,7 @@ use warp::{
     Filter, Rejection, Reply,
 };
 
+use crate::auth::resource::Action;
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::range::ContentRange;
 use crate::repository::{authorize_repository, Repository};
@@ -625,7 +626,7 @@ where
 fn blob_exists<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::head()
-        .and(authorize_repository())
+        .and(authorize_repository(Action::Read))
         .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(check_blob_exists)
@@ -635,7 +636,7 @@ fn blob_exists<B: BlobStore + Send + Sync + 'static>(
 fn blob_get<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::get()
-        .and(authorize_repository())
+        .and(authorize_repository(Action::Read))
         .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(fetch_blob)
@@ -645,7 +646,7 @@ fn blob_get<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
-        .and(authorize_repository())
+        .and(authorize_repository(Action::Write))
         .and(warp::path!("blobs" / "uploads" / Uuid))
         .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
@@ -657,7 +658,7 @@ fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::post()
-        .and(authorize_repository())
+        .and(authorize_repository(Action::Write))
         .and(warp::path!("blobs" / "uploads"))
         .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
@@ -669,7 +670,7 @@ fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
 fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::patch()
-        .and(authorize_repository())
+        .and(authorize_repository(Action::Write))
         .and(warp::path!("blobs" / "uploads" / Uuid))
         .and(warp::header::optional::<ContentRange>("Content-Range"))
         .and(warp::filters::ext::get::<Arc<B>>())
