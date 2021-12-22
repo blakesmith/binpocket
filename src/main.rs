@@ -3,6 +3,7 @@ mod binpocket;
 mod blob;
 mod digest;
 mod error;
+mod lock;
 mod manifest;
 mod range;
 mod repository;
