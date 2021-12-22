@@ -2,7 +2,6 @@
 
 pkgs.mkShell {
   buildInputs = [
-    pkgs.flatbuffers
     pkgs.rustup
   ];
 }
