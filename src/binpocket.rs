@@ -1,3 +1,4 @@
+use heed::EnvOpenOptions;
 use hyper::Server;
 use jwt_simple::algorithms::ES256KeyPair;
 use manifest::LmdbManifestStore;
@@ -41,7 +42,7 @@ pub struct Config {
 #[derive(Debug)]
 pub enum BinpocketError {
     Io(std::io::Error),
-    Lmdb(lmdb::Error),
+    Lmdb(heed::Error),
     Hyper(hyper::Error),
     Manifest(manifest::ManifestStoreError),
 }
@@ -64,8 +65,8 @@ impl From<manifest::ManifestStoreError> for BinpocketError {
     }
 }
 
-impl From<lmdb::Error> for BinpocketError {
-    fn from(err: lmdb::Error) -> Self {
+impl From<heed::Error> for BinpocketError {
+    fn from(err: heed::Error) -> Self {
         Self::Lmdb(err)
     }
 }
@@ -95,7 +96,7 @@ pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
 
     let lmdb_path = config.data_path.join("lmdb");
     tokio::fs::create_dir_all(&lmdb_path).await?;
-    let env = Arc::new(lmdb::Environment::new().set_max_dbs(5).open(&lmdb_path)?);
+    let env = EnvOpenOptions::new().max_dbs(50).open(lmdb_path)?;
     let manifest_store = Arc::new(LmdbManifestStore::open(env)?);
 
     let key_pair = ES256KeyPair::generate(); // TODO: Save it somewhere stable
