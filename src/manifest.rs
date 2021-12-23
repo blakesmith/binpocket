@@ -268,7 +268,7 @@ impl ManifestStore for LmdbManifestStore {
         let digest_str = format!("{}", manifest_digest);
         let repository_cloned = repository.to_string();
         let reference_cloned = reference.to_string();
-        let key = format!("{}_tags", repository);
+        let key = repository.to_string();
 
         tokio::task::spawn_blocking(move || {
             let mut tx = env.write_txn()?;
@@ -303,7 +303,7 @@ impl ManifestStore for LmdbManifestStore {
     ) -> Result<protos::RepositoryTags, ManifestStoreError> {
         let env = self.env.clone();
         let repository_tags = self.repository_tags.clone();
-        let key = format!("{}_tags", repository);
+        let key = repository.to_string();
 
         tokio::task::spawn_blocking(move || {
             let tx = env.read_txn()?;
