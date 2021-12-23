@@ -72,6 +72,11 @@ pub struct BlobMetadata {
 /// Once blobs are written, they remain in storage until they are no longer
 /// referenced by any manifests, at which point they will be garbage collected
 /// and deleted.
+///
+/// Implementors of this trait can assume that concurrent access to individual
+/// blobs is handled a LockingBlobStore implementation, which wraps around a
+/// basic BlobStore operation that doesn't need to implement safe concurrent blob
+/// access.
 #[async_trait]
 pub trait BlobStore {
     type Writer: AsyncWrite + Unpin + Send + Debug;
@@ -115,6 +120,102 @@ pub trait BlobStore {
     /// it's guaranteed that there are no longer any references to this blob
     /// that are reachable.
     async fn delete_blob(&self, digest: &digest::Digest) -> Result<(), BlobStoreError>;
+}
+
+/// BlobStore implementation that performs locking on
+/// blobs keyed by content digest before performing any
+/// underlying operations.
+///
+/// We need granular locks on each blob, to make sure that
+/// we:
+///
+/// 1. Maintain internal consistency on blob reference counting, to
+///    make sure we only delete blobs that truly have no more manifest
+///    references.
+/// 2. We don't accidentally delete a blob that might have concurrent
+///    reads being performed on it.
+///
+pub struct LockingBlobStore<B: BlobStore + Send + Sync + 'static> {
+    /// The underlying BlobStore that this wraps.
+    delegate: B,
+
+    /// Blob locks. A LockRef must be acquired and used, for each blob
+    /// before any read / write operations are perfomed the blob.
+    locks: LockManager<digest::Digest>,
+}
+
+impl<B: BlobStore + Send + Sync + 'static> LockingBlobStore<B> {
+    pub fn new(delegate: B) -> Self {
+        Self {
+            delegate,
+            locks: LockManager::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl<B: BlobStore + Send + Sync + 'static> BlobStore for LockingBlobStore<B> {
+    type Writer = B::Writer;
+    type Reader = B::Reader;
+
+    async fn start_upload(&self) -> Result<Uuid, BlobStoreError> {
+        // No locking necessary. Sessions are transient, and exclusive
+        // to a single client. Go straight to delegate store.
+        self.delegate.start_upload().await
+    }
+
+    async fn get_session(
+        &self,
+        session_id: &Uuid,
+        pos: u64,
+    ) -> Result<Arc<Mutex<UploadSession<Self::Writer>>>, BlobStoreError> {
+        // No locking necessary. Sessions are transient, and exclusive
+        // to a single client. Go straight to delegate store.
+        self.delegate.get_session(session_id, pos).await
+    }
+
+    async fn finalize_upload(
+        &self,
+        session_id: &Uuid,
+        digest: &digest::Digest,
+    ) -> Result<(), BlobStoreError> {
+        // Exclusive lock on the blob before finalizing it into
+        // permananent storage.
+        let blob_lock = self.locks.acquire_ref(digest.clone());
+        let _blob_lock_guard = blob_lock.write().await;
+
+        self.delegate.finalize_upload(session_id, digest).await
+    }
+
+    async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError> {
+        // No locking necessary, go straight to delegate store.
+        self.delegate.cancel_upload(session_id).await
+    }
+
+    async fn blob_metadata(&self, digest: &digest::Digest) -> Result<BlobMetadata, BlobStoreError> {
+        // Read lock on the blob before fetching metadata
+        let blob_lock = self.locks.acquire_ref(digest.clone());
+        let _blob_lock_guard = blob_lock.read().await;
+
+        self.delegate.blob_metadata(digest).await
+    }
+
+    async fn get_blob(&self, digest: &digest::Digest) -> Result<Self::Reader, BlobStoreError> {
+        // Read lock on the blob before reading blob content.
+        let blob_lock = self.locks.acquire_ref(digest.clone());
+        let _blob_lock_guard = blob_lock.read().await;
+
+        self.delegate.get_blob(digest).await
+    }
+
+    async fn delete_blob(&self, digest: &digest::Digest) -> Result<(), BlobStoreError> {
+        // We must acquire an exclusive write lock during
+        // our blob delete operation.
+        let blob_lock = self.locks.acquire_ref(digest.clone());
+        let _blob_lock_guard = blob_lock.write().await;
+
+        self.delegate.delete_blob(digest).await
+    }
 }
 
 /// Represents the state that needs to be tracked by the server
@@ -199,10 +300,6 @@ pub struct FsBlobStore {
     /// TODO: We must periodically clean this up to prevent resource
     /// leaks!
     sessions: RwLock<HashMap<Uuid, Arc<Mutex<UploadSession<File>>>>>,
-
-    /// Blob locks. Must be for each blob before any read / write
-    /// operations are perfomed on it.
-    locks: LockManager<digest::Digest>,
 }
 
 impl FsBlobStore {
@@ -214,7 +311,6 @@ impl FsBlobStore {
         Ok(Self {
             root_directory,
             sessions: RwLock::new(HashMap::new()),
-            locks: LockManager::new(),
         })
     }
 }
@@ -281,10 +377,6 @@ impl BlobStore for FsBlobStore {
         // Drop the session, closing the underlying file handle.
         drop(session);
 
-        // Lock on the blob before doing the rename.
-        let blob_lock = self.locks.acquire_ref(digest.clone());
-        let _blob_lock_guard = blob_lock.write().await;
-
         // Transition the upload session file to stable, immutable
         // blob storage.
         fs::rename(
@@ -320,10 +412,6 @@ impl BlobStore for FsBlobStore {
     }
 
     async fn blob_metadata(&self, digest: &digest::Digest) -> Result<BlobMetadata, BlobStoreError> {
-        // Read lock on the blob before fetching metadata
-        let blob_lock = self.locks.acquire_ref(digest.clone());
-        let _blob_lock_guard = blob_lock.read().await;
-
         match fs::metadata(
             self.root_directory
                 .join("blobs")
@@ -340,10 +428,6 @@ impl BlobStore for FsBlobStore {
     }
 
     async fn get_blob(&self, digest: &digest::Digest) -> Result<Self::Reader, BlobStoreError> {
-        // Read lock on the blob before reading the blob.
-        let blob_lock = self.locks.acquire_ref(digest.clone());
-        let _blob_lock_guard = blob_lock.read().await;
-
         match File::open(
             self.root_directory
                 .join("blobs")
@@ -358,11 +442,6 @@ impl BlobStore for FsBlobStore {
     }
 
     async fn delete_blob(&self, digest: &digest::Digest) -> Result<(), BlobStoreError> {
-        // We must acquire an exclusive write lock during
-        // our blob delete operation.
-        let blob_lock = self.locks.acquire_ref(digest.clone());
-        let _blob_lock_guard = blob_lock.write().await;
-
         let path = self
             .root_directory
             .join("blobs")

@@ -21,7 +21,10 @@ use crate::auth::{
     self, credential::JWTTokenGenerator, principal::User, resource::Scope, Authenticator,
     Authorizer, FixedPrincipalAuthenticator,
 };
-use crate::{blob, error, manifest};
+use crate::{
+    blob::{self, FsBlobStore, LockingBlobStore},
+    error, manifest,
+};
 
 #[derive(Deserialize)]
 pub struct UserConfig {
@@ -92,7 +95,7 @@ fn version_root(auth_url: &str) -> impl Filter<Extract = (impl Reply,), Error = 
 
 pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
     let blob_path = config.data_path.join("oci");
-    let blob_store = Arc::new(blob::FsBlobStore::open(blob_path)?);
+    let blob_store = Arc::new(LockingBlobStore::new(FsBlobStore::open(blob_path)?));
 
     let lmdb_path = config.data_path.join("lmdb");
     tokio::fs::create_dir_all(&lmdb_path).await?;
@@ -122,7 +125,7 @@ pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
     let routes = auth::routes()
         .or(warp::path("v2").and(
             (version_root(&auth_url))
-                .or(blob::routes::<blob::FsBlobStore>())
+                .or(blob::routes::<LockingBlobStore<FsBlobStore>>())
                 .or(manifest::routes::<manifest::LmdbManifestStore>()),
         ))
         .recover(error::handle_rejection);
