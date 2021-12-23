@@ -20,6 +20,8 @@ pub mod protos {
     include!(concat!(env!("OUT_DIR"), "/binpocket.manifest.rs"));
 }
 
+/// The minimum 'common denominator' fields we need on each layer
+/// or media item.
 #[allow(dead_code)]
 pub struct CanonicalMedia {
     media_type: String,
@@ -27,9 +29,75 @@ pub struct CanonicalMedia {
     digest: digest::Digest,
 }
 
+/// Represents the 'common denominator' image manifest that we operate
+/// on top of.
 #[allow(dead_code)]
 pub struct CanonicalImageManifest {
     layers: Vec<CanonicalMedia>,
+}
+
+impl TryFrom<protos::MediaV2> for CanonicalMedia {
+    type Error = ImageManifestError;
+
+    fn try_from(proto: protos::MediaV2) -> Result<Self, Self::Error> {
+        let digest = digest::Digest::try_from(proto.digest.as_str())
+            .map_err(|msg| ImageManifestError::Conversion(msg))?;
+        Ok(Self {
+            media_type: proto.media_type,
+            size: proto.size,
+            digest,
+        })
+    }
+}
+
+impl TryFrom<protos::ImageManifest> for CanonicalImageManifest {
+    type Error = ImageManifestError;
+
+    fn try_from(proto: protos::ImageManifest) -> Result<Self, Self::Error> {
+        match proto.manifest_version {
+            Some(protos::image_manifest::ManifestVersion::V2(v2)) => {
+                let mut layers = Vec::new();
+                for layer in v2.layers {
+                    let media = CanonicalMedia::try_from(layer)?;
+                    layers.push(media);
+                }
+                Ok(Self { layers })
+            }
+            None => Err(ImageManifestError::IllegalState(
+                "Got no manifest version. Should always have one!",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ImageManifestError {
+    UnknownMediaType(String),
+    Conversion(String),
+    IllegalState(&'static str),
+    Serde(serde_json::error::Error),
+}
+
+impl From<serde_json::error::Error> for ImageManifestError {
+    fn from(err: serde_json::error::Error) -> Self {
+        Self::Serde(err)
+    }
+}
+
+pub fn parse_manifest_json(
+    media_type: &str,
+    json: &bytes::Bytes,
+) -> Result<protos::ImageManifest, ImageManifestError> {
+    match media_type {
+        "application/vnd.docker.distribution.manifest.v2+json" => {
+            let manifest_v2: protos::ImageManifestV2 = serde_json::from_slice(json)?;
+            let manifest = protos::ImageManifest {
+                manifest_version: Some(protos::image_manifest::ManifestVersion::V2(manifest_v2)),
+            };
+            Ok(manifest)
+        }
+        _ => Err(ImageManifestError::UnknownMediaType(media_type.to_string())),
+    }
 }
 
 #[derive(Debug)]
@@ -237,8 +305,15 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
         digest::DigestAlgorithm::Sha256,
         format!("{:x}", sha256.finalize()),
     );
-    // TODO: Validate the manifest content before storing
-    // it.
+    let _image_manifest = parse_manifest_json(&content_type, &body).map_err(|err| {
+        tracing::debug!("Invalid manifest format: {:?}", err);
+        ErrorResponse::new(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::ManifestInvalid,
+            format!("Invalid manifest format"),
+        )
+    })?;
+
     manifest_store
         .store_manifest(&digest, content_type, body)
         .await?;

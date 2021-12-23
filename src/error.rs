@@ -16,6 +16,9 @@ pub enum ErrorCode {
     #[serde(rename = "MANIFEST_UNKNOWN")]
     ManifestUnknown,
 
+    #[serde(rename = "MANIFEST_INVALID")]
+    ManifestInvalid,
+
     #[serde(rename = "NAME_UKNOWN")]
     NameUnknown,
 
