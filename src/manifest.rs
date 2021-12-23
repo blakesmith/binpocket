@@ -176,14 +176,32 @@ pub trait ManifestStore {
 }
 
 pub struct LmdbManifestStore {
+    // Top level LMDB 'environment'. All sub databases below are part of
+    // the same high-level 'database', and can all participate in transactions
+    // together.
     env: heed::Env,
-    db: heed::PolyDatabase,
+
+    // Protobuf parsed / validated manifests. Written with protos::ImageManifest.
+    manifests: heed::Database<ByteSlice, ByteSlice>,
+
+    // Raw manifests. Written with protos::RawManifest.
+    raw_manifests: heed::Database<ByteSlice, ByteSlice>,
+
+    // Repository tags. Written with protos::RepositoryTags.
+    repository_tags: heed::Database<ByteSlice, ByteSlice>,
 }
 
 impl LmdbManifestStore {
     pub fn open(env: heed::Env) -> Result<Self, ManifestStoreError> {
-        let db = env.create_poly_database(Some("manifests"))?;
-        Ok(Self { env, db })
+        let manifests = env.create_database(Some("manifests"))?;
+        let raw_manifests = env.create_database(Some("raw_manifests"))?;
+        let repository_tags = env.create_database(Some("repository_tags"))?;
+        Ok(Self {
+            env,
+            manifests,
+            raw_manifests,
+            repository_tags,
+        })
     }
 }
 
@@ -196,7 +214,7 @@ impl ManifestStore for LmdbManifestStore {
         raw_payload: bytes::Bytes,
     ) -> Result<(), ManifestStoreError> {
         let env = self.env.clone();
-        let db = self.db.clone();
+        let raw_manifests = self.raw_manifests.clone();
         let digest_bytes = digest.get_bytes();
         let raw_manifest = protos::RawManifest {
             content_type: content_type,
@@ -206,7 +224,7 @@ impl ManifestStore for LmdbManifestStore {
         raw_manifest.encode(&mut value)?;
         tokio::task::spawn_blocking(move || {
             let mut tx = env.write_txn()?;
-            db.put::<_, ByteSlice, ByteSlice>(&mut tx, &digest_bytes, &value)?;
+            raw_manifests.put(&mut tx, &digest_bytes, &value)?;
             tx.commit().map_err(|err| err.into())
         })
         .await?
@@ -217,11 +235,11 @@ impl ManifestStore for LmdbManifestStore {
         digest: &digest::Digest,
     ) -> Result<protos::RawManifest, ManifestStoreError> {
         let env = self.env.clone();
-        let db = self.db.clone();
+        let raw_manifests = self.raw_manifests.clone();
         let digest_bytes = digest.get_bytes();
         tokio::task::spawn_blocking(move || {
             let tx = env.read_txn()?;
-            let buf = match db.get::<_, ByteSlice, ByteSlice>(&tx, &digest_bytes)? {
+            let buf = match raw_manifests.get(&tx, &digest_bytes)? {
                 Some(b) => Ok(b),
                 None => Err(ManifestStoreError::NotFound),
             }?;
@@ -237,7 +255,7 @@ impl ManifestStore for LmdbManifestStore {
         manifest_digest: &digest::Digest,
     ) -> Result<(), ManifestStoreError> {
         let env = self.env.clone();
-        let db = self.db.clone();
+        let repository_tags = self.repository_tags.clone();
         let digest_str = format!("{}", manifest_digest);
         let repository_cloned = repository.to_string();
         let reference_cloned = reference.to_string();
@@ -250,7 +268,7 @@ impl ManifestStore for LmdbManifestStore {
                 manifest_digest: digest_str,
             };
 
-            let repo_tags = match db.get::<_, ByteSlice, ByteSlice>(&tx, key.as_bytes())? {
+            let repo_tags = match repository_tags.get(&tx, key.as_bytes())? {
                 Some(b) => {
                     let mut existing = protos::RepositoryTags::decode(b)?;
                     existing.tag_references.push(new_tag);
@@ -264,7 +282,7 @@ impl ManifestStore for LmdbManifestStore {
 
             let mut value = bytes::BytesMut::new();
             repo_tags.encode(&mut value)?;
-            db.put::<_, ByteSlice, ByteSlice>(&mut tx, key.as_bytes(), &value)?;
+            repository_tags.put(&mut tx, key.as_bytes(), &value)?;
             tx.commit().map_err(|err| err.into())
         })
         .await?
@@ -275,13 +293,13 @@ impl ManifestStore for LmdbManifestStore {
         repository: &str,
     ) -> Result<protos::RepositoryTags, ManifestStoreError> {
         let env = self.env.clone();
-        let db = self.db.clone();
+        let repository_tags = self.repository_tags.clone();
         let key = format!("{}_tags", repository);
 
         tokio::task::spawn_blocking(move || {
             let tx = env.read_txn()?;
-            let buf = db
-                .get::<_, ByteSlice, ByteSlice>(&tx, key.as_bytes())?
+            let buf = repository_tags
+                .get(&tx, key.as_bytes())?
                 .ok_or(ManifestStoreError::NotFound)?;
             Ok(protos::RepositoryTags::decode(buf)?)
         })
