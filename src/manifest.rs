@@ -148,8 +148,9 @@ pub trait ManifestStore {
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
+        manifest: &protos::ImageManifest,
         content_type: String,
-        raw_payload: bytes::Bytes,
+        raw_manifest_payload: bytes::Bytes,
     ) -> Result<(), ManifestStoreError>;
 
     /// Lookup a manifest by its content addressable digest.
@@ -210,21 +211,29 @@ impl ManifestStore for LmdbManifestStore {
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
+        manifest: &protos::ImageManifest,
         content_type: String,
-        raw_payload: bytes::Bytes,
+        raw_manifest_payload: bytes::Bytes,
     ) -> Result<(), ManifestStoreError> {
         let env = self.env.clone();
         let raw_manifests = self.raw_manifests.clone();
+        let manifests = self.manifests.clone();
         let digest_bytes = digest.get_bytes();
         let raw_manifest = protos::RawManifest {
             content_type: content_type,
-            raw_payload: raw_payload.to_vec(),
+            raw_payload: raw_manifest_payload.to_vec(),
         };
-        let mut value = bytes::BytesMut::new();
-        raw_manifest.encode(&mut value)?;
+        let mut raw_manifest_buf = bytes::BytesMut::new();
+        let mut manifest_buf = bytes::BytesMut::new();
+        raw_manifest.encode(&mut raw_manifest_buf)?;
+        manifest.encode(&mut manifest_buf)?;
         tokio::task::spawn_blocking(move || {
             let mut tx = env.write_txn()?;
-            raw_manifests.put(&mut tx, &digest_bytes, &value)?;
+            // Store both the raw manifest payload...
+            raw_manifests.put(&mut tx, &digest_bytes, &raw_manifest_buf)?;
+
+            // As well as the protobuf encoded version.
+            manifests.put(&mut tx, &digest_bytes, &manifest_buf)?;
             tx.commit().map_err(|err| err.into())
         })
         .await?
@@ -323,7 +332,7 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
         digest::DigestAlgorithm::Sha256,
         format!("{:x}", sha256.finalize()),
     );
-    let _image_manifest = parse_manifest_json(&content_type, &body).map_err(|err| {
+    let image_manifest = parse_manifest_json(&content_type, &body).map_err(|err| {
         tracing::debug!("Invalid manifest format: {:?}", err);
         ErrorResponse::new(
             StatusCode::BAD_REQUEST,
@@ -333,7 +342,7 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
     })?;
 
     manifest_store
-        .store_manifest(&digest, content_type, body)
+        .store_manifest(&digest, &image_manifest, content_type, body)
         .await?;
     manifest_store
         .tag_manifest(&repository.name, &reference, &digest)
