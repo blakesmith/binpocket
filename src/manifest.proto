@@ -43,11 +43,50 @@ message RawManifest {
     bytes raw_payload = 2;
 }
 
+message MediaV2 {
+    // The media type of the media content.
+    // Examples:
+    // 1. For a container image itself: "application/vnd.docker.container.image.v1+json"
+    // 2. For each rootfs layer tarball: "application/vnd.docker.image.rootfs.diff.tar.gzip"
+    string media_type = 1;
+
+    // The size of the media itself, in bytes.
+    uint64 size = 2;
+
+    // The raw content digest. Example: "sha256:3875fa64ab1e7ef45b19c31db513b33dd704aead9360fc096cbf4831311233d8"
+    string digest = 3;
+}
+
+// Version 2 of the image manifest format. Denoted with 'schemaVerson: 2' and 'mediaType: application/vnd.docker.distribution.manifest.v2+json'
+message ImageManifestV2 {
+    // Integer number representing the schema version. Always '2'
+    // for v2 of the specification.
+    uint32 schema_version = 1;
+
+    // Media configuration of this manifest.
+    MediaV2 config = 2;
+
+    // Media type of the manifest. Should be: 'application/vnd.docker.distribution.manifest.v2+json'
+    string media_type = 3;
+
+    // Actual image layers. This is where the actual rootfs tarballs go.
+    repeated MediaV2 layers = 4;
+}
+
+/// An image manifest, decoded into its requisite structure.
+/// Note that image manifests are versioned.
+message ImageManifest {
+    oneof manifest_version {
+	ImageManifestV2 v2 = 1;
+    }
+}
+
 // List all known references to this particular blob.
 // We need to keep track of blob references in order to
 // garbage collect and delete blobs that no longer have
 // any manifests that reference them.
-message BlobReferencePage {
+message BlobReferences {
     // Manifest reference count
     uint32 manifest_ref_count = 1;
 }
+

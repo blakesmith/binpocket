@@ -1,6 +1,22 @@
 use std::io::Result;
 
 fn main() -> Result<()> {
-    prost_build::compile_protos(&["src/manifest.proto"], &["src/"])?;
+    let mut config = prost_build::Config::new();
+    config.type_attribute(
+        ".binpocket.manifest.ImageManifestV2",
+        "#[derive(Deserialize)]",
+    );
+    config.type_attribute(
+        ".binpocket.manifest.ImageManifestV2",
+        "#[serde(rename_all = \"camelCase\")]",
+    );
+
+    config.type_attribute(".binpocket.manifest.MediaV2", "#[derive(Deserialize)]");
+    config.type_attribute(
+        ".binpocket.manifest.MediaV2",
+        "#[serde(rename_all = \"camelCase\")]",
+    );
+
+    config.compile_protos(&["src/manifest.proto"], &["src/"])?;
     Ok(())
 }

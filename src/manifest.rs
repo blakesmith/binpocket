@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use heed::types::ByteSlice;
 use prost::Message;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -11,32 +10,26 @@ use warp::{
 };
 
 use crate::auth::resource::Action;
+use crate::digest;
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::repository::{authorize_repository, Repository};
-use crate::{digest, digest::deserialize_digest_string};
 
 pub mod protos {
+    use serde::Deserialize;
+
     include!(concat!(env!("OUT_DIR"), "/binpocket.manifest.rs"));
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-struct Media {
+pub struct CanonicalMedia {
     media_type: String,
     size: u64,
-
-    #[serde(deserialize_with = "deserialize_digest_string")]
     digest: digest::Digest,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-struct ImageManifest {
-    schema_version: u8,
-    config: Media,
-    layers: Vec<Media>,
+pub struct CanonicalImageManifest {
+    layers: Vec<CanonicalMedia>,
 }
 
 #[derive(Debug)]
@@ -376,4 +369,29 @@ fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
 pub fn routes<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     manifest_put::<M>().or(manifest_get_or_head::<M>())
+}
+
+#[test]
+fn test_deserializes_manifest_v2_from_json() {
+    use self::protos;
+    use std::fs::File;
+    use std::path::PathBuf;
+
+    let resource_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/test");
+    let v2_manifest = resource_dir.join("v2_manifest.json");
+    let mut v2_manifest_file = File::open(v2_manifest).expect("Could not open v2 manifest file");
+    let manifest: protos::ImageManifestV2 =
+        serde_json::from_reader(&mut v2_manifest_file).expect("Could not deserialize v2 manifest");
+
+    assert_eq!(2, manifest.schema_version);
+    assert_eq!(
+        "application/vnd.docker.distribution.manifest.v2+json",
+        manifest.media_type
+    );
+    assert_eq!(21, manifest.layers.len());
+    assert_eq!(
+        "sha256:99046ad9247f8a1cbd1048d9099d026191ad9cda63c08aadeb704b7000a51717",
+        manifest.layers[0].digest
+    );
+    assert_eq!(31361314, manifest.layers[0].size);
 }
