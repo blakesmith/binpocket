@@ -29,6 +29,7 @@ use warp::{
 
 use crate::auth::resource::Action;
 use crate::error::{ErrorCode, ErrorResponse};
+use crate::lock::LockManager;
 use crate::range::ContentRange;
 use crate::repository::{authorize_repository, Repository};
 use crate::{
@@ -189,6 +190,9 @@ pub struct FsBlobStore {
     /// TODO: We must periodically clean this up to prevent resource
     /// leaks!
     sessions: RwLock<HashMap<Uuid, Arc<Mutex<UploadSession<File>>>>>,
+
+    /// Blob locks. Must be acquired before blob operations.
+    locks: LockManager<digest::Digest>,
 }
 
 impl FsBlobStore {
@@ -200,6 +204,7 @@ impl FsBlobStore {
         Ok(Self {
             root_directory,
             sessions: RwLock::new(HashMap::new()),
+            locks: LockManager::new(),
         })
     }
 }
@@ -266,6 +271,10 @@ impl BlobStore for FsBlobStore {
         // Drop the session, closing the underlying file handle.
         drop(session);
 
+        // Lock on the blob before doing the rename.
+        let blob_lock = self.locks.acquire_ref(digest.clone());
+        let _blob_lock_guard = blob_lock.write().await;
+
         // Transition the upload session file to stable, immutable
         // blob storage.
         fs::rename(
@@ -301,6 +310,10 @@ impl BlobStore for FsBlobStore {
     }
 
     async fn blob_metadata(&self, digest: &digest::Digest) -> Result<BlobMetadata, BlobStoreError> {
+        // Read lock on the blob before fetching metadata
+        let blob_lock = self.locks.acquire_ref(digest.clone());
+        let _blob_lock_guard = blob_lock.read().await;
+
         match fs::metadata(
             self.root_directory
                 .join("blobs")
@@ -317,6 +330,10 @@ impl BlobStore for FsBlobStore {
     }
 
     async fn get_blob(&self, digest: &digest::Digest) -> Result<Self::Reader, BlobStoreError> {
+        // Read lock on the blob before reading the blob.
+        let blob_lock = self.locks.acquire_ref(digest.clone());
+        let _blob_lock_guard = blob_lock.read().await;
+
         match File::open(
             self.root_directory
                 .join("blobs")

@@ -26,7 +26,7 @@ where
     }
 }
 
-#[derive(Clone, Hash, Debug, PartialEq)]
+#[derive(Clone, Hash, Debug, PartialEq, Eq)]
 pub enum DigestAlgorithm {
     Sha256,
     Sha512,
@@ -47,7 +47,7 @@ impl std::fmt::Display for DigestAlgorithm {
 
 /// Content identifier for Blobs, as well as Manifest objects inside
 /// repositories.
-#[derive(Hash, Debug, PartialEq)]
+#[derive(Clone, Hash, Debug, PartialEq, Eq)]
 pub struct Digest {
     pub algorithm: DigestAlgorithm,
     encoded: String,
