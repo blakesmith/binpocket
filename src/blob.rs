@@ -200,7 +200,8 @@ pub struct FsBlobStore {
     /// leaks!
     sessions: RwLock<HashMap<Uuid, Arc<Mutex<UploadSession<File>>>>>,
 
-    /// Blob locks. Must be acquired before blob operations.
+    /// Blob locks. Must be for each blob before any read / write
+    /// operations are perfomed on it.
     locks: LockManager<digest::Digest>,
 }
 
@@ -360,7 +361,7 @@ impl BlobStore for FsBlobStore {
         // We must acquire an exclusive write lock during
         // our blob delete operation.
         let blob_lock = self.locks.acquire_ref(digest.clone());
-        let _blob_lock_guard = blob_lock.read().await;
+        let _blob_lock_guard = blob_lock.write().await;
 
         let path = self
             .root_directory
