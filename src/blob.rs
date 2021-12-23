@@ -68,6 +68,10 @@ pub struct BlobMetadata {
 /// the primary identifier for the blob going forward. A blob effectively becomes
 /// immutable once the upload has been completed. Callers must either 'finalize'
 /// a blob upload, or 'cancel' it to clean up temporary session upload state.
+///
+/// Once blobs are written, they remain in storage until they are no longer
+/// referenced by any manifests, at which point they will be garbage collected
+/// and deleted.
 #[async_trait]
 pub trait BlobStore {
     type Writer: AsyncWrite + Unpin + Send + Debug;
@@ -106,6 +110,11 @@ pub trait BlobStore {
 
     /// Read the raw blob contents.
     async fn get_blob(&self, digest: &digest::Digest) -> Result<Self::Reader, BlobStoreError>;
+
+    /// Delete a blob by its content digest. By the time this method is called
+    /// it's guaranteed that there are no longer any references to this blob
+    /// that are reachable.
+    async fn delete_blob(&self, digest: &digest::Digest) -> Result<(), BlobStoreError>;
 }
 
 /// Represents the state that needs to be tracked by the server
@@ -345,6 +354,21 @@ impl BlobStore for FsBlobStore {
             Err(err) if err.kind() == ErrorKind::NotFound => Err(BlobStoreError::NotFound),
             Err(err) => Err(err.into()),
         }
+    }
+
+    async fn delete_blob(&self, digest: &digest::Digest) -> Result<(), BlobStoreError> {
+        // We must acquire an exclusive write lock during
+        // our blob delete operation.
+        let blob_lock = self.locks.acquire_ref(digest.clone());
+        let _blob_lock_guard = blob_lock.read().await;
+
+        let path = self
+            .root_directory
+            .join("blobs")
+            .join(format!("{}", digest));
+
+        fs::remove_file(&path).await?;
+        Ok(())
     }
 }
 
