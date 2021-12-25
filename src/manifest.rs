@@ -227,6 +227,8 @@ impl LmdbManifestStore {
         })
     }
 
+    /// Adjust the reference count for all the layers / blobs that a
+    /// particular manifest points to.
     fn apply_manifest_blob_references_diff(
         txn: &mut RwTxn,
         blob_locks: &BlobLocks,
