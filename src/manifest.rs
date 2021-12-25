@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use heed::types::ByteSlice;
+use heed::RwTxn;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
@@ -37,28 +38,28 @@ pub struct CanonicalImageManifest {
     layers: Vec<CanonicalMedia>,
 }
 
-impl TryFrom<protos::MediaV2> for CanonicalMedia {
+impl TryFrom<&protos::MediaV2> for CanonicalMedia {
     type Error = ImageManifestError;
 
-    fn try_from(proto: protos::MediaV2) -> Result<Self, Self::Error> {
+    fn try_from(proto: &protos::MediaV2) -> Result<Self, Self::Error> {
         let digest = digest::Digest::try_from(proto.digest.as_str())
             .map_err(|msg| ImageManifestError::Conversion(msg))?;
         Ok(Self {
-            media_type: proto.media_type,
+            media_type: proto.media_type.clone(),
             size: proto.size,
             digest,
         })
     }
 }
 
-impl TryFrom<protos::ImageManifest> for CanonicalImageManifest {
+impl TryFrom<&protos::ImageManifest> for CanonicalImageManifest {
     type Error = ImageManifestError;
 
-    fn try_from(proto: protos::ImageManifest) -> Result<Self, Self::Error> {
+    fn try_from(proto: &protos::ImageManifest) -> Result<Self, Self::Error> {
         match proto.manifest_version {
-            Some(protos::image_manifest::ManifestVersion::V2(v2)) => {
+            Some(protos::image_manifest::ManifestVersion::V2(ref v2)) => {
                 let mut layers = Vec::new();
-                for layer in v2.layers {
+                for layer in &v2.layers {
                     let media = CanonicalMedia::try_from(layer)?;
                     layers.push(media);
                 }
@@ -108,6 +109,7 @@ pub enum ManifestStoreError {
     NotFound,
     JoinError(tokio::task::JoinError),
     Lmdb(heed::Error),
+    Conversion(ImageManifestError),
 }
 
 impl warp::reject::Reject for ManifestStoreError {}
@@ -149,7 +151,7 @@ pub trait ManifestStore {
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
-        blob_locks: &BlobLocks,
+        blob_locks: BlobLocks,
         manifest: &protos::ImageManifest,
         content_type: String,
         raw_manifest_payload: bytes::Bytes,
@@ -187,6 +189,12 @@ pub struct LmdbManifestStore {
     // Protobuf parsed / validated manifests. Written with protos::ImageManifest.
     manifests: heed::Database<ByteSlice, ByteSlice>,
 
+    // Reference counts for each blob that a manifest points to. We
+    // need to track this since multiple manifests can point to a blob,
+    // and we need to know when we can safetly delete blobs (once no more
+    // manifests point to them).
+    manifest_blob_references: heed::Database<ByteSlice, ByteSlice>,
+
     // Raw manifests. Written with protos::RawManifest.
     raw_manifests: heed::Database<ByteSlice, ByteSlice>,
 
@@ -197,14 +205,31 @@ pub struct LmdbManifestStore {
 impl LmdbManifestStore {
     pub fn open(env: heed::Env) -> Result<Self, ManifestStoreError> {
         let manifests = env.create_database(Some("manifests"))?;
+        let manifest_blob_references = env.create_database(Some("manifest_blob_references"))?;
         let raw_manifests = env.create_database(Some("raw_manifests"))?;
         let repository_tags = env.create_database(Some("repository_tags"))?;
         Ok(Self {
             env,
             manifests,
+            manifest_blob_references,
             raw_manifests,
             repository_tags,
         })
+    }
+
+    fn increment_blob_references(
+        txn: &mut RwTxn,
+        blob_locks: &BlobLocks,
+        manifest_blob_references: heed::Database<ByteSlice, ByteSlice>,
+        manifest: &CanonicalImageManifest,
+    ) -> Result<(), ManifestStoreError> {
+        for layer in &manifest.layers {
+            let lock_ref = blob_locks.acquire_blob_lock_ref(layer.digest.clone());
+            let _blob_guard = futures::executor::block_on(async { lock_ref.write().await });
+
+            // Finish writing out reference increments
+        }
+        Ok(())
     }
 }
 
@@ -213,14 +238,21 @@ impl ManifestStore for LmdbManifestStore {
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
-        blob_locks: &BlobLocks,
+        blob_locks: BlobLocks,
         manifest: &protos::ImageManifest,
         content_type: String,
         raw_manifest_payload: bytes::Bytes,
     ) -> Result<(), ManifestStoreError> {
+        let canonical_manifest = CanonicalImageManifest::try_from(manifest)
+            .map_err(|err| ManifestStoreError::Conversion(err))?;
+
+        // DB handles.
         let env = self.env.clone();
         let raw_manifests = self.raw_manifests.clone();
         let manifests = self.manifests.clone();
+        let manifest_blob_references = self.manifest_blob_references.clone();
+
+        // Manifest payloads
         let digest_bytes = digest.get_bytes();
         let raw_manifest = protos::RawManifest {
             content_type: content_type,
@@ -230,6 +262,7 @@ impl ManifestStore for LmdbManifestStore {
         let mut manifest_buf = bytes::BytesMut::new();
         raw_manifest.encode(&mut raw_manifest_buf)?;
         manifest.encode(&mut manifest_buf)?;
+
         tokio::task::spawn_blocking(move || {
             let mut tx = env.write_txn()?;
             // Store both the raw manifest payload...
@@ -237,6 +270,16 @@ impl ManifestStore for LmdbManifestStore {
 
             // As well as the protobuf encoded version.
             manifests.put(&mut tx, &digest_bytes, &manifest_buf)?;
+
+            // Now we need to increment the reference count
+            // for every blob that this manifest references.
+            Self::increment_blob_references(
+                &mut tx,
+                &blob_locks,
+                manifest_blob_references,
+                &canonical_manifest,
+            )?;
+
             tx.commit().map_err(|err| err.into())
         })
         .await?
@@ -346,7 +389,7 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
     })?;
 
     manifest_store
-        .store_manifest(&digest, &blob_locks, &image_manifest, content_type, body)
+        .store_manifest(&digest, blob_locks, &image_manifest, content_type, body)
         .await?;
     manifest_store
         .tag_manifest(&repository.name, &reference, &digest)
