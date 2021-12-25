@@ -1,8 +1,8 @@
-use async_lock::{RwLock as AsyncRwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::cmp::Eq;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, RwLock};
+use tokio::sync::{RwLock as AsyncRwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Single acquired lock reference that's tied to a particular
 /// object key. When the last outstanding LockRef for a given

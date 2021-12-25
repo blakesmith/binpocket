@@ -1,8 +1,8 @@
-use async_lock::{Mutex, RwLock};
 use async_trait::async_trait;
 use bytes::Buf;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use tokio::sync::{Mutex, RwLock};
 
 use futures_util::{stream, Stream, StreamExt};
 use serde::Deserialize;
