@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use heed::types::ByteSlice;
+use heed::types::{ByteSlice, OwnedType};
 use heed::RwTxn;
 use prost::Message;
 use sha2::{Digest, Sha256};
@@ -20,6 +20,16 @@ pub mod protos {
     use serde::Deserialize;
 
     include!(concat!(env!("OUT_DIR"), "/binpocket.manifest.rs"));
+}
+
+/// Simple increment / decrement enum.
+/// TODO: Move somewhere else?
+/// Replace with mixed integer functions once they land
+/// in stable? https://github.com/rust-lang/rust/pull/87601
+#[derive(Debug, Clone, Copy)]
+pub enum CountDiff {
+    Inc(u64),
+    Dec(u64),
 }
 
 /// The minimum 'common denominator' fields we need on each layer
@@ -193,7 +203,7 @@ pub struct LmdbManifestStore {
     // need to track this since multiple manifests can point to a blob,
     // and we need to know when we can safetly delete blobs (once no more
     // manifests point to them).
-    manifest_blob_references: heed::Database<ByteSlice, ByteSlice>,
+    manifest_blob_references: heed::Database<ByteSlice, OwnedType<u64>>,
 
     // Raw manifests. Written with protos::RawManifest.
     raw_manifests: heed::Database<ByteSlice, ByteSlice>,
@@ -217,19 +227,56 @@ impl LmdbManifestStore {
         })
     }
 
-    fn increment_blob_references(
+    fn apply_manifest_blob_references_diff(
         txn: &mut RwTxn,
         blob_locks: &BlobLocks,
-        manifest_blob_references: heed::Database<ByteSlice, ByteSlice>,
+        manifest_blob_references: heed::Database<ByteSlice, OwnedType<u64>>,
         manifest: &CanonicalImageManifest,
+        diff: CountDiff,
     ) -> Result<(), ManifestStoreError> {
         for layer in &manifest.layers {
-            let lock_ref = blob_locks.acquire_blob_lock_ref(layer.digest.clone());
-            let _blob_guard = futures::executor::block_on(async { lock_ref.write().await });
-
-            // Finish writing out reference increments
+            Self::apply_blob_reference_diff(
+                txn,
+                blob_locks,
+                &manifest_blob_references,
+                &layer.digest,
+                diff,
+            )?;
         }
         Ok(())
+    }
+
+    fn apply_blob_reference_diff(
+        txn: &mut RwTxn,
+        blob_locks: &BlobLocks,
+        manifest_blob_references: &heed::Database<ByteSlice, OwnedType<u64>>,
+        digest: &digest::Digest,
+        diff: CountDiff,
+    ) -> Result<(), ManifestStoreError> {
+        // We need to acquire any blob locks before we're adjusting
+        // reference counts. If all our state was kept internally in
+        // LMDB, this wouldn't be necessary, as the writer would enable
+        // exclusive access: However, because we store blobs externally
+        // from LMDB, we also need to hold any locks before we adjust internal
+        // state. This prevents external deletions / mutations from occuring
+        let lock_ref = blob_locks.acquire_blob_lock_ref(digest.clone());
+        let _blob_guard = futures::executor::block_on(async { lock_ref.write().await });
+
+        let digest_bytes = digest.get_bytes();
+        let mut ref_count = manifest_blob_references
+            .get(txn, &digest_bytes)?
+            .unwrap_or(0);
+
+        // Use saturating addition / subtraction, to make sure we never
+        // overflow. Should never happen in practice.
+        ref_count = match diff {
+            CountDiff::Inc(n) => ref_count.saturating_add(n),
+            CountDiff::Dec(n) => ref_count.saturating_sub(n),
+        };
+
+        manifest_blob_references
+            .put(txn, &digest_bytes, &ref_count)
+            .map_err(|err| err.into())
     }
 }
 
@@ -273,11 +320,12 @@ impl ManifestStore for LmdbManifestStore {
 
             // Now we need to increment the reference count
             // for every blob that this manifest references.
-            Self::increment_blob_references(
+            Self::apply_manifest_blob_references_diff(
                 &mut tx,
                 &blob_locks,
                 manifest_blob_references,
                 &canonical_manifest,
+                CountDiff::Inc(1),
             )?;
 
             tx.commit().map_err(|err| err.into())
