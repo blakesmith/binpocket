@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock};
 /// key goes out of scope, the underlying object lock gets dropped
 /// to avoid leaking memory.
 #[derive(Clone, Debug)]
-pub(crate) struct LockRef<T: Hash + Eq + Clone> {
+pub struct LockRef<T: Hash + Eq + Clone> {
     manager: LockManager<T>,
     key: T,
     obj: Option<Arc<AsyncRwLock<u8>>>,

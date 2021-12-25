@@ -10,6 +10,7 @@ use warp::{
 };
 
 use crate::auth::resource::Action;
+use crate::blob::BlobLocks;
 use crate::digest;
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::repository::{authorize_repository, Repository};
@@ -148,6 +149,7 @@ pub trait ManifestStore {
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
+        blob_locks: &BlobLocks,
         manifest: &protos::ImageManifest,
         content_type: String,
         raw_manifest_payload: bytes::Bytes,
@@ -211,6 +213,7 @@ impl ManifestStore for LmdbManifestStore {
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
+        blob_locks: &BlobLocks,
         manifest: &protos::ImageManifest,
         content_type: String,
         raw_manifest_payload: bytes::Bytes,
@@ -321,6 +324,7 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
     reference: String,
     content_type: String,
     manifest_store: Arc<M>,
+    blob_locks: BlobLocks,
     body: bytes::Bytes,
 ) -> Result<Response<&'static str>, Rejection> {
     let location = format!("/v2/{}/manifests/{}", &repository.name, &reference);
@@ -342,7 +346,7 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
     })?;
 
     manifest_store
-        .store_manifest(&digest, &image_manifest, content_type, body)
+        .store_manifest(&digest, &blob_locks, &image_manifest, content_type, body)
         .await?;
     manifest_store
         .tag_manifest(&repository.name, &reference, &digest)
@@ -450,6 +454,7 @@ fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
         .and(warp::path!("manifests" / String))
         .and(warp::header::<String>("Content-Type"))
         .and(warp::filters::ext::get::<Arc<M>>())
+        .and(warp::filters::ext::get::<BlobLocks>())
         .and(warp::body::bytes())
         .and_then(process_manifest_put)
         .boxed()

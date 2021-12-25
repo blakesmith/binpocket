@@ -135,6 +135,7 @@ pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
     let service = ServiceBuilder::new()
         .layer(TraceLayer::new_for_http().on_response(DefaultOnResponse::new().level(Level::INFO)))
         .layer(CompressionLayer::new())
+        .layer(AddExtensionLayer::new(blob_store.locks()))
         .layer(AddExtensionLayer::new(blob_store))
         .layer(AddExtensionLayer::new(manifest_store))
         .layer(AddExtensionLayer::new(authenticator))

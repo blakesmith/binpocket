@@ -29,7 +29,7 @@ use warp::{
 
 use crate::auth::resource::Action;
 use crate::error::{ErrorCode, ErrorResponse};
-use crate::lock::LockManager;
+use crate::lock::{LockManager, LockRef};
 use crate::range::ContentRange;
 use crate::repository::{authorize_repository, Repository};
 use crate::{
@@ -151,6 +151,12 @@ impl<B: BlobStore + Send + Sync + 'static> LockingBlobStore<B> {
             locks: LockManager::new(),
         }
     }
+
+    pub fn locks(&self) -> BlobLocks {
+        BlobLocks {
+            locks: self.locks.clone(),
+        }
+    }
 }
 
 #[async_trait]
@@ -215,6 +221,20 @@ impl<B: BlobStore + Send + Sync + 'static> BlobStore for LockingBlobStore<B> {
         let _blob_lock_guard = blob_lock.write().await;
 
         self.delegate.delete_blob(digest).await
+    }
+}
+
+/// We need this struct wrapper, so that we can pass around
+/// a type that warp can fetch using its 'AnyMap' in request
+/// extensions. It basically just wraps the LockManager.
+#[derive(Debug, Clone)]
+pub struct BlobLocks {
+    locks: LockManager<digest::Digest>,
+}
+
+impl BlobLocks {
+    pub fn acquire_blob_lock_ref(&self, blob_id: digest::Digest) -> LockRef<digest::Digest> {
+        self.locks.acquire_ref(blob_id)
     }
 }
 
