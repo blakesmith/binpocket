@@ -104,6 +104,7 @@ pub fn parse_manifest_json(
         "application/vnd.docker.distribution.manifest.v2+json" => {
             let manifest_v2: protos::ImageManifestV2 = serde_json::from_slice(json)?;
             let manifest = protos::ImageManifest {
+                status: protos::ManifestStatus::Active as i32,
                 manifest_version: Some(protos::image_manifest::ManifestVersion::V2(manifest_v2)),
             };
             Ok(manifest)
@@ -311,6 +312,7 @@ impl ManifestStore for LmdbManifestStore {
         // Manifest payloads
         let digest_bytes = digest.get_bytes();
         let raw_manifest = protos::RawManifest {
+            status: protos::ManifestStatus::Active as i32,
             content_type: content_type,
             raw_payload: raw_manifest_payload.to_vec(),
         };
@@ -355,7 +357,12 @@ impl ManifestStore for LmdbManifestStore {
                 Some(b) => Ok(b),
                 None => Err(ManifestStoreError::NotFound),
             }?;
-            Ok(protos::RawManifest::decode(buf)?)
+            let raw_manifest = protos::RawManifest::decode(buf)?;
+            if raw_manifest.status == protos::ManifestStatus::Deleted as i32 {
+                Err(ManifestStoreError::NotFound)
+            } else {
+                Ok(raw_manifest)
+            }
         })
         .await?
     }
@@ -365,7 +372,57 @@ impl ManifestStore for LmdbManifestStore {
         digest: &digest::Digest,
         blob_locks: BlobLocks,
     ) -> Result<(), ManifestStoreError> {
-        Ok(())
+        let env = self.env.clone();
+        let manifests = self.manifests.clone();
+        let raw_manifests = self.raw_manifests.clone();
+        let manifest_blob_references = self.manifest_blob_references.clone();
+        let digest_bytes = digest.get_bytes();
+
+        tokio::task::spawn_blocking(move || {
+            let mut tx = env.write_txn()?;
+            let mut raw_manifest = raw_manifests
+                .get(&tx, &digest_bytes)?
+                .ok_or(ManifestStoreError::NotFound)
+                .and_then(|buf| protos::RawManifest::decode(buf).map_err(|err| err.into()))?;
+            let mut manifest = manifests
+                .get(&tx, &digest_bytes)?
+                .ok_or(ManifestStoreError::NotFound)
+                .and_then(|buf| protos::ImageManifest::decode(buf).map_err(|err| err.into()))?;
+
+            // The manifest has already been deleted, bail early.
+            if raw_manifest.status == protos::ManifestStatus::Deleted as i32
+                || manifest.status == protos::ManifestStatus::Deleted as i32
+            {
+                return Err(ManifestStoreError::NotFound);
+            }
+
+            let canonical_manifest = CanonicalImageManifest::try_from(&manifest)
+                .map_err(|err| ManifestStoreError::Conversion(err))?;
+
+            raw_manifest.status = protos::ManifestStatus::Deleted as i32;
+            manifest.status = protos::ManifestStatus::Deleted as i32;
+
+            let mut raw_manifest_deleted = bytes::BytesMut::new();
+            let mut manifest_deleted = bytes::BytesMut::new();
+
+            raw_manifest.encode(&mut raw_manifest_deleted)?;
+            manifest.encode(&mut manifest_deleted)?;
+
+            raw_manifests.put(&mut tx, &digest_bytes, &raw_manifest_deleted)?;
+            manifests.put(&mut tx, &digest_bytes, &manifest_deleted)?;
+
+            // Decrement all blob references in this manifest
+            Self::apply_manifest_blob_references_diff(
+                &mut tx,
+                &blob_locks,
+                manifest_blob_references,
+                &canonical_manifest,
+                CountDiff::Dec(1),
+            )?;
+
+            tx.commit().map_err(|err| err.into())
+        })
+        .await?
     }
 
     async fn tag_manifest(

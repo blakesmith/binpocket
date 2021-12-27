@@ -26,6 +26,11 @@ message TagReference {
     string manifest_digest = 2;
 }
 
+enum ManifestStatus {
+    ACTIVE = 0;
+    DELETED = 1;
+}
+
 // The raw stored value of a manifest.
 // Because manifests are content hashed
 // via a digest, we must reproduce the manifest
@@ -34,13 +39,16 @@ message TagReference {
 // manifest bytes directly, along with any
 // other useful metadata.
 message RawManifest {
+    // Status of the manifest.
+    ManifestStatus status = 1;
+
     // The 'Content-Type' header that was
     // uploaded. Example: 'application/vnd.docker.distribution.manifest.v2+json'
-    string content_type = 1;
+    string content_type = 2;
 
     // The raw manifest payload that was
     // sent to us.
-    bytes raw_payload = 2;
+    bytes raw_payload = 3;
 }
 
 message MediaV2 {
@@ -76,8 +84,11 @@ message ImageManifestV2 {
 /// An image manifest, decoded into its requisite structure.
 /// Note that image manifests are versioned.
 message ImageManifest {
+    // Status of the manifest.
+    ManifestStatus status = 1;
+
     oneof manifest_version {
-	ImageManifestV2 v2 = 1;
+	ImageManifestV2 v2 = 2;
     }
 }
 
