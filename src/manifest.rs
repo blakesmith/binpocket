@@ -540,6 +540,18 @@ where
     }
 }
 
+async fn process_manifest_delete<M>(
+    repository: Repository,
+    reference: String,
+    manifest_store: Arc<M>,
+    blob_locks: BlobLocks,
+) -> Result<Response<&'static str>, Rejection> {
+    Ok(warp::http::response::Builder::new()
+        .status(StatusCode::ACCEPTED)
+        .body("")
+        .unwrap())
+}
+
 fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
@@ -566,9 +578,22 @@ fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
         .boxed()
 }
 
+fn manifest_delete<M: ManifestStore + Send + Sync + 'static>(
+) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+    warp::delete()
+        .and(authorize_repository(Action::Write))
+        .and(warp::path!("manifests" / String))
+        .and(warp::filters::ext::get::<Arc<M>>())
+        .and(warp::filters::ext::get::<BlobLocks>())
+        .and_then(process_manifest_delete)
+        .boxed()
+}
+
 pub fn routes<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    manifest_put::<M>().or(manifest_get_or_head::<M>())
+    manifest_put::<M>()
+        .or(manifest_get_or_head::<M>())
+        .or(manifest_delete::<M>())
 }
 
 #[test]
