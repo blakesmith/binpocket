@@ -173,6 +173,13 @@ pub trait ManifestStore {
         digest: &digest::Digest,
     ) -> Result<protos::RawManifest, ManifestStoreError>;
 
+    /// Delete a manifest by digest.
+    async fn delete_manifest(
+        &self,
+        digest: &digest::Digest,
+        blob_locks: BlobLocks,
+    ) -> Result<(), ManifestStoreError>;
+
     /// Add a tag / reference in the repository to an already stored manifest. The
     /// manifest must be already stored via 'store_manifest' in the given repository
     /// for this to work.
@@ -351,6 +358,14 @@ impl ManifestStore for LmdbManifestStore {
             Ok(protos::RawManifest::decode(buf)?)
         })
         .await?
+    }
+
+    async fn delete_manifest(
+        &self,
+        digest: &digest::Digest,
+        blob_locks: BlobLocks,
+    ) -> Result<(), ManifestStoreError> {
+        Ok(())
     }
 
     async fn tag_manifest(
@@ -545,7 +560,17 @@ async fn process_manifest_delete<M>(
     reference: String,
     manifest_store: Arc<M>,
     blob_locks: BlobLocks,
-) -> Result<Response<&'static str>, Rejection> {
+) -> Result<Response<&'static str>, Rejection>
+where
+    M: ManifestStore + Send + Sync + 'static,
+{
+    let digest = match digest::Digest::try_from(&reference as &str) {
+        Ok(d) => d,
+        Err(_err) => manifest_digest_for_tag(&repository.name, &reference, &manifest_store).await?,
+    };
+
+    manifest_store.delete_manifest(&digest, blob_locks).await?;
+
     Ok(warp::http::response::Builder::new()
         .status(StatusCode::ACCEPTED)
         .body("")
