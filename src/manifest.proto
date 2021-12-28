@@ -92,12 +92,3 @@ message ImageManifest {
     }
 }
 
-// List all known references to this particular blob.
-// We need to keep track of blob references in order to
-// garbage collect and delete blobs that no longer have
-// any manifests that reference them.
-message BlobReferences {
-    // Manifest reference count
-    uint32 manifest_ref_count = 1;
-}
-
