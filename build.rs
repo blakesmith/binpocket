@@ -17,6 +17,6 @@ fn main() -> Result<()> {
         "#[serde(rename_all = \"camelCase\")]",
     );
 
-    config.compile_protos(&["src/manifest.proto"], &["src/"])?;
+    config.compile_protos(&["src/manifest.proto", "src/repository.proto"], &["src/"])?;
     Ok(())
 }
