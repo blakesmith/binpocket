@@ -81,8 +81,8 @@ message ImageManifestV2 {
     repeated MediaV2 layers = 4;
 }
 
-/// An image manifest, decoded into its requisite structure.
-/// Note that image manifests are versioned.
+// An image manifest, decoded into its requisite structure.
+// Note that image manifests are versioned.
 message ImageManifest {
     // Status of the manifest.
     ManifestStatus status = 1;
@@ -92,3 +92,33 @@ message ImageManifest {
     }
 }
 
+// Server doesn't delete any images in a repository
+// unless a user explicitly deletes them.
+message ExplicitDeleteOnlyPolicy {
+    // No configuration necessary for this one.
+}
+
+// At any given time, only keep the most recent 'last_count' number of
+// images in a repository.
+message KeepRecentCountPolicy {
+    uint64 last_count = 1;
+}
+
+// Define a policy that dictates what images should be kept in a particular
+// reository, and under what conditions. The server will delete images for
+// the repository, based on the policy specified. Some example policies include:
+//
+// 1. Explicit delete only (server retain everything until a user deletes an image manifest)
+// 2. Keep last X number of images
+//
+// All policies are "best effort": They are executed in the background periodically
+//
+message ImageRetentionPolicy {
+    // The name of the repository this policy is associated with.
+    string repository = 1;
+
+    oneof policy {
+	ExplicitDeleteOnlyPolicy explicit_delete = 2;
+	KeepRecentCountPolicy keep_recent_count = 3;
+    }
+}
