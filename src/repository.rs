@@ -6,6 +6,10 @@ use crate::auth::{
 use std::sync::Arc;
 use warp::{Filter, Rejection};
 
+pub mod protos {
+    include!(concat!(env!("OUT_DIR"), "/binpocket.repository.rs"));
+}
+
 #[derive(Debug)]
 pub struct Repository {
     pub name: String,

@@ -18,7 +18,11 @@ fn main() -> Result<()> {
     );
 
     config.compile_protos(
-        &["protos/manifest.proto", "protos/repository.proto"],
+        &[
+            "protos/manifest.proto",
+            "protos/repository.proto",
+            "protos/uuid.proto",
+        ],
         &["protos/"],
     )?;
     Ok(())
