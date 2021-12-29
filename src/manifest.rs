@@ -14,7 +14,7 @@ use crate::auth::resource::Action;
 use crate::blob::BlobLocks;
 use crate::digest;
 use crate::error::{ErrorCode, ErrorResponse};
-use crate::repository::{authorize_repository, Repository};
+use crate::repository::{authorize_repository, protos as repo_protos, Repository};
 
 pub mod protos {
     use serde::Deserialize;
@@ -156,6 +156,13 @@ impl From<prost::DecodeError> for ManifestStoreError {
 /// their content addressable digest.
 #[async_trait]
 pub trait ManifestStore {
+    /// Get or create a repository by its name. We mostly use this
+    /// to exchange a repository name for its unique identifier.
+    async fn get_or_create_repository(
+        &self,
+        repository_name: &str,
+    ) -> Result<repo_protos::Repository, ManifestStoreError>;
+
     /// Store a raw manifest, with the given digest as the
     /// key, the content_type of the payload, and the raw
     /// payload itself.
@@ -292,6 +299,13 @@ impl LmdbManifestStore {
 
 #[async_trait]
 impl ManifestStore for LmdbManifestStore {
+    async fn get_or_create_repository(
+        &self,
+        repository_name: &str,
+    ) -> Result<repo_protos::Repository, ManifestStoreError> {
+        todo!()
+    }
+
     async fn store_manifest(
         &self,
         digest: &digest::Digest,
