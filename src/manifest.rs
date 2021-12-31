@@ -1,10 +1,12 @@
 use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
 use heed::types::{ByteSlice, OwnedType};
 use heed::RwTxn;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
 use std::sync::Arc;
+use uuid::Uuid;
 use warp::{
     http::{Method, Response, StatusCode},
     Filter, Rejection, Reply,
@@ -98,7 +100,7 @@ impl From<serde_json::error::Error> for ImageManifestError {
 
 pub fn parse_manifest_json(
     media_type: &str,
-    json: &bytes::Bytes,
+    json: &Bytes,
 ) -> Result<protos::ImageManifest, ImageManifestError> {
     match media_type {
         "application/vnd.docker.distribution.manifest.v2+json" => {
@@ -172,7 +174,7 @@ pub trait ManifestStore {
         blob_locks: BlobLocks,
         manifest: &protos::ImageManifest,
         content_type: String,
-        raw_manifest_payload: bytes::Bytes,
+        raw_manifest_payload: Bytes,
     ) -> Result<(), ManifestStoreError>;
 
     /// Lookup a manifest by its content addressable digest.
@@ -211,6 +213,9 @@ pub struct LmdbManifestStore {
     // together.
     env: heed::Env,
 
+    // Repositories
+    repositories: heed::Database<ByteSlice, ByteSlice>,
+
     // Protobuf parsed / validated manifests. Written with protos::ImageManifest.
     manifests: heed::Database<ByteSlice, ByteSlice>,
 
@@ -230,11 +235,13 @@ pub struct LmdbManifestStore {
 impl LmdbManifestStore {
     pub fn open(env: heed::Env) -> Result<Self, ManifestStoreError> {
         let manifests = env.create_database(Some("manifests"))?;
+        let repositories = env.create_database(Some("repositories"))?;
         let manifest_blob_references = env.create_database(Some("manifest_blob_references"))?;
         let raw_manifests = env.create_database(Some("raw_manifests"))?;
         let repository_tags = env.create_database(Some("repository_tags"))?;
         Ok(Self {
             env,
+            repositories,
             manifests,
             manifest_blob_references,
             raw_manifests,
@@ -303,7 +310,41 @@ impl ManifestStore for LmdbManifestStore {
         &self,
         repository_name: &str,
     ) -> Result<repo_protos::Repository, ManifestStoreError> {
-        todo!()
+        let env = self.env.clone();
+        let repositories = self.repositories.clone();
+        let repository_name_owned = repository_name.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            // We deliberately break this call into multiple transactions,
+            // because it's not worth it for us to take out an exclusive
+            // write lock on every single lookup, when creating new repositories
+            // should be a relatively rare event.
+
+            let repository_key = repository_name_owned.as_bytes();
+            let read_txn = env.read_txn()?;
+            match repositories.get(&read_txn, &repository_key)? {
+                Some(buf) => {
+                    let repo = repo_protos::Repository::decode(buf)?;
+                    read_txn.commit()?;
+                    Ok(repo)
+                }
+                None => {
+                    read_txn.commit()?;
+                    let new_repo = repo_protos::Repository {
+                        id: Some(crate::uuid::new_v4_proto_uuid()),
+                        repository_type: repo_protos::RepositoryType::OciV2 as i32,
+                        name: repository_name_owned.to_string(),
+                    };
+                    let mut repository_buf = BytesMut::new();
+                    new_repo.encode(&mut repository_buf)?;
+                    let mut write_txn = env.write_txn()?;
+                    repositories.put(&mut write_txn, &repository_key, &repository_buf)?;
+                    write_txn.commit()?;
+                    Ok(new_repo)
+                }
+            }
+        })
+        .await?
     }
 
     async fn store_manifest(
@@ -312,7 +353,7 @@ impl ManifestStore for LmdbManifestStore {
         blob_locks: BlobLocks,
         manifest: &protos::ImageManifest,
         content_type: String,
-        raw_manifest_payload: bytes::Bytes,
+        raw_manifest_payload: Bytes,
     ) -> Result<(), ManifestStoreError> {
         let canonical_manifest = CanonicalImageManifest::try_from(manifest)
             .map_err(|err| ManifestStoreError::Conversion(err))?;
@@ -330,8 +371,8 @@ impl ManifestStore for LmdbManifestStore {
             content_type: content_type,
             raw_payload: raw_manifest_payload.to_vec(),
         };
-        let mut raw_manifest_buf = bytes::BytesMut::new();
-        let mut manifest_buf = bytes::BytesMut::new();
+        let mut raw_manifest_buf = BytesMut::new();
+        let mut manifest_buf = BytesMut::new();
         raw_manifest.encode(&mut raw_manifest_buf)?;
         manifest.encode(&mut manifest_buf)?;
 
@@ -416,8 +457,8 @@ impl ManifestStore for LmdbManifestStore {
             raw_manifest.status = protos::ManifestStatus::Deleted as i32;
             manifest.status = protos::ManifestStatus::Deleted as i32;
 
-            let mut raw_manifest_deleted = bytes::BytesMut::new();
-            let mut manifest_deleted = bytes::BytesMut::new();
+            let mut raw_manifest_deleted = BytesMut::new();
+            let mut manifest_deleted = BytesMut::new();
 
             raw_manifest.encode(&mut raw_manifest_deleted)?;
             manifest.encode(&mut manifest_deleted)?;
@@ -471,7 +512,7 @@ impl ManifestStore for LmdbManifestStore {
                 }),
             }?;
 
-            let mut value = bytes::BytesMut::new();
+            let mut value = BytesMut::new();
             repo_tags.encode(&mut value)?;
             repository_tags.put(&mut tx, key.as_bytes(), &value)?;
             tx.commit().map_err(|err| err.into())
@@ -504,7 +545,7 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
     content_type: String,
     manifest_store: Arc<M>,
     blob_locks: BlobLocks,
-    body: bytes::Bytes,
+    body: Bytes,
 ) -> Result<Response<&'static str>, Rejection> {
     let location = format!("/v2/{}/manifests/{}", &repository.name, &reference);
 
