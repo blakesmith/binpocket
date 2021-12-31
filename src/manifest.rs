@@ -205,6 +205,13 @@ pub trait ManifestStore {
         &self,
         repository: &Repository,
     ) -> Result<protos::RepositoryTags, ManifestStoreError>;
+
+    /// Lookup the image retention policy for the given
+    /// repository.
+    async fn get_repository_retention_policy(
+        &self,
+        repository: &Repository,
+    ) -> Result<repo_protos::ImageRetentionPolicy, ManifestStoreError>;
 }
 
 pub struct LmdbManifestStore {
@@ -552,6 +559,23 @@ impl ManifestStore for LmdbManifestStore {
             Ok(protos::RepositoryTags::decode(buf)?)
         })
         .await?
+    }
+
+    async fn get_repository_retention_policy(
+        &self,
+        repository: &Repository,
+    ) -> Result<repo_protos::ImageRetentionPolicy, ManifestStoreError> {
+        // TODO: Until we have a way to define a repository level setting
+        // for this, let's just pick a default.
+
+        Ok(repo_protos::ImageRetentionPolicy {
+            repository_id: Some(crate::uuid::encode_to_proto(&repository.id)),
+            policy: Some(
+                repo_protos::image_retention_policy::Policy::KeepRecentCount(
+                    repo_protos::KeepRecentCountPolicy { last_count: 5 },
+                ),
+            ),
+        })
     }
 }
 

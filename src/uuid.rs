@@ -9,6 +9,12 @@ pub fn new_v4_proto_uuid() -> self::Uuid {
     }
 }
 
+pub fn encode_to_proto(uuid: &uuid::Uuid) -> self::Uuid {
+    self::Uuid {
+        value: Vec::from(*uuid.as_bytes()),
+    }
+}
+
 pub fn decode_from_proto(proto_uuid: &Option<self::Uuid>) -> Result<uuid::Uuid, String> {
     proto_uuid
         .as_ref()
