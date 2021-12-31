@@ -125,7 +125,10 @@ pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
     let routes = auth::routes()
         .or(warp::path("v2").and(
             (version_root(&auth_url))
-                .or(blob::routes::<LockingBlobStore<FsBlobStore>>())
+                .or(blob::routes::<
+                    LockingBlobStore<FsBlobStore>,
+                    manifest::LmdbManifestStore,
+                >())
                 .or(manifest::routes::<manifest::LmdbManifestStore>()),
         ))
         .recover(error::handle_rejection);

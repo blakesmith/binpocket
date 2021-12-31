@@ -3,7 +3,10 @@ use crate::auth::{
     resource::{Action, Resource},
     AuthzTarget, Visibility,
 };
+use crate::manifest::{ManifestStore, ManifestStoreError};
+use crate::uuid as proto_uuid;
 use std::sync::Arc;
+use uuid::Uuid;
 use warp::{Filter, Rejection};
 
 pub mod protos {
@@ -12,6 +15,7 @@ pub mod protos {
 
 #[derive(Debug)]
 pub struct Repository {
+    pub id: Uuid,
     pub name: String,
 }
 
@@ -25,20 +29,33 @@ impl AuthzTarget for Repository {
     }
 }
 
-pub fn repository() -> impl Filter<Extract = (Repository,), Error = Rejection> + Clone {
+async fn lookup_repository<M: ManifestStore + Send + Sync + 'static>(
+    name: String,
+    manifest_store: Arc<M>,
+) -> Result<Repository, Rejection> {
+    tracing::debug!("Repository name is: {}", name);
+    let repository = manifest_store.get_or_create_repository(&name).await?;
+    let uuid = proto_uuid::decode_from_proto(&repository.id)
+        .map_err(|err| ManifestStoreError::Uuid(err))?;
+    Ok(Repository {
+        id: uuid,
+        name: repository.name,
+    })
+}
+
+pub fn repository<M: ManifestStore + Send + Sync + 'static>(
+) -> impl Filter<Extract = (Repository,), Error = Rejection> + Clone {
     warp::path::param()
-        .map(|name| {
-            tracing::debug!("Repository name is: {}", name);
-            Repository { name }
-        })
+        .and(warp::filters::ext::get::<Arc<M>>())
+        .and_then(lookup_repository)
         .boxed()
 }
 
-pub fn authorize_repository(
+pub fn authorize_repository<M: ManifestStore + Send + Sync + 'static>(
     action: Action,
 ) -> impl Filter<Extract = (Repository,), Error = Rejection> + Clone {
     auth::authenticate()
-        .and(repository())
+        .and(repository::<M>())
         .and(warp::filters::ext::get::<Arc<auth::Authorizer>>())
         .and_then(move |principal, repo, authorizer| {
             auth::authorize(principal, repo, action, authorizer)

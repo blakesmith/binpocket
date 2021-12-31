@@ -30,6 +30,7 @@ use warp::{
 use crate::auth::resource::Action;
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::lock::{LockManager, LockRef};
+use crate::manifest::ManifestStore;
 use crate::range::ContentRange;
 use crate::repository::{authorize_repository, Repository};
 use crate::{
@@ -764,30 +765,39 @@ where
     }
 }
 
-fn blob_exists<B: BlobStore + Send + Sync + 'static>(
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+fn blob_exists<B, M>() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+where
+    M: ManifestStore + Send + Sync + 'static,
+    B: BlobStore + Send + Sync + 'static,
+{
     warp::head()
-        .and(authorize_repository(Action::Read))
+        .and(authorize_repository::<M>(Action::Read))
         .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(check_blob_exists)
         .boxed()
 }
 
-fn blob_get<B: BlobStore + Send + Sync + 'static>(
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+fn blob_get<B, M>() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+where
+    M: ManifestStore + Send + Sync + 'static,
+    B: BlobStore + Send + Sync + 'static,
+{
     warp::get()
-        .and(authorize_repository(Action::Read))
+        .and(authorize_repository::<M>(Action::Read))
         .and(warp::path!("blobs" / String))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and_then(fetch_blob)
         .boxed()
 }
 
-fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+fn blob_upload_put<B, M>() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+where
+    M: ManifestStore + Send + Sync + 'static,
+    B: BlobStore + Send + Sync + 'static,
+{
     warp::put()
-        .and(authorize_repository(Action::Write))
+        .and(authorize_repository::<M>(Action::Write))
         .and(warp::path!("blobs" / "uploads" / Uuid))
         .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
@@ -796,10 +806,13 @@ fn blob_upload_put<B: BlobStore + Send + Sync + 'static>(
         .boxed()
 }
 
-fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+fn blob_upload_post<B, M>() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+where
+    M: ManifestStore + Send + Sync + 'static,
+    B: BlobStore + Send + Sync + 'static,
+{
     warp::post()
-        .and(authorize_repository(Action::Write))
+        .and(authorize_repository::<M>(Action::Write))
         .and(warp::path!("blobs" / "uploads"))
         .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
@@ -808,10 +821,13 @@ fn blob_upload_post<B: BlobStore + Send + Sync + 'static>(
         .boxed()
 }
 
-fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
+fn blob_upload_patch<B, M>() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+where
+    M: ManifestStore + Send + Sync + 'static,
+    B: BlobStore + Send + Sync + 'static,
+{
     warp::patch()
-        .and(authorize_repository(Action::Write))
+        .and(authorize_repository::<M>(Action::Write))
         .and(warp::path!("blobs" / "uploads" / Uuid))
         .and(warp::header::optional::<ContentRange>("Content-Range"))
         .and(warp::filters::ext::get::<Arc<B>>())
@@ -820,11 +836,14 @@ fn blob_upload_patch<B: BlobStore + Send + Sync + 'static>(
         .boxed()
 }
 
-pub fn routes<B: BlobStore + Send + Sync + 'static>(
-) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
-    blob_exists::<B>()
-        .or(blob_get::<B>())
-        .or(blob_upload_post::<B>())
-        .or(blob_upload_put::<B>())
-        .or(blob_upload_patch::<B>())
+pub fn routes<B, M>() -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone
+where
+    M: ManifestStore + Send + Sync + 'static,
+    B: BlobStore + Send + Sync + 'static,
+{
+    blob_exists::<B, M>()
+        .or(blob_get::<B, M>())
+        .or(blob_upload_post::<B, M>())
+        .or(blob_upload_put::<B, M>())
+        .or(blob_upload_patch::<B, M>())
 }

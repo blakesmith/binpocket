@@ -6,7 +6,6 @@ use prost::Message;
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
 use std::sync::Arc;
-use uuid::Uuid;
 use warp::{
     http::{Method, Response, StatusCode},
     Filter, Rejection, Reply,
@@ -123,6 +122,7 @@ pub enum ManifestStoreError {
     JoinError(tokio::task::JoinError),
     Lmdb(heed::Error),
     Conversion(ImageManifestError),
+    Uuid(String),
 }
 
 impl warp::reject::Reject for ManifestStoreError {}
@@ -335,6 +335,7 @@ impl ManifestStore for LmdbManifestStore {
                         repository_type: repo_protos::RepositoryType::OciV2 as i32,
                         name: repository_name_owned.to_string(),
                     };
+                    tracing::info!("Creating repository: {:?}", new_repo);
                     let mut repository_buf = BytesMut::new();
                     new_repo.encode(&mut repository_buf)?;
                     let mut write_txn = env.write_txn()?;
@@ -692,7 +693,7 @@ where
 fn manifest_put<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::put()
-        .and(authorize_repository(Action::Write))
+        .and(authorize_repository::<M>(Action::Write))
         .and(warp::path!("manifests" / String))
         .and(warp::header::<String>("Content-Type"))
         .and(warp::filters::ext::get::<Arc<M>>())
@@ -708,7 +709,7 @@ fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
         .map(|_| ())
         .untuple_one() // Remove the unused method filter.
         .and(warp::method())
-        .and(authorize_repository(Action::Read))
+        .and(authorize_repository::<M>(Action::Read))
         .and(warp::path!("manifests" / String))
         .and(warp::filters::ext::get::<Arc<M>>())
         .and_then(process_manifest_get_or_head)
@@ -718,7 +719,7 @@ fn manifest_get_or_head<M: ManifestStore + Send + Sync + 'static>(
 fn manifest_delete<M: ManifestStore + Send + Sync + 'static>(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     warp::delete()
-        .and(authorize_repository(Action::Write))
+        .and(authorize_repository::<M>(Action::Write))
         .and(warp::path!("manifests" / String))
         .and(warp::filters::ext::get::<Arc<M>>())
         .and(warp::filters::ext::get::<BlobLocks>())
