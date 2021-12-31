@@ -330,6 +330,22 @@ impl ManifestStore for LmdbManifestStore {
                 }
                 None => {
                     read_txn.commit()?;
+                    let mut write_txn = env.write_txn()?;
+
+                    // Because we don't hold an exclusive lock on all reads, we might
+                    // have a race where multiple transactions try to create a new repository.
+                    // We need to do yet another lookup inside an exclusive write transaction
+                    // to make sure no one has raced us to create the repo.
+                    if let Some(buf) = repositories.get(&mut write_txn, &repository_key)? {
+                        let repo = repo_protos::Repository::decode(buf)?;
+                        tracing::info!(
+                            "Another transaction created the repository, returning repo: {:?}",
+                            repo
+                        );
+                        write_txn.abort()?;
+                        return Ok(repo);
+                    }
+
                     let new_repo = repo_protos::Repository {
                         id: Some(crate::uuid::new_v4_proto_uuid()),
                         repository_type: repo_protos::RepositoryType::OciV2 as i32,
@@ -338,7 +354,6 @@ impl ManifestStore for LmdbManifestStore {
                     tracing::info!("Creating repository: {:?}", new_repo);
                     let mut repository_buf = BytesMut::new();
                     new_repo.encode(&mut repository_buf)?;
-                    let mut write_txn = env.write_txn()?;
                     repositories.put(&mut write_txn, &repository_key, &repository_buf)?;
                     write_txn.commit()?;
                     Ok(new_repo)
