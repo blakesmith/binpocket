@@ -195,7 +195,7 @@ pub trait ManifestStore {
     /// for this to work.
     async fn tag_manifest(
         &self,
-        repository: &str,
+        repository: &Repository,
         reference: &str,
         manifest_digest: &digest::Digest,
     ) -> Result<(), ManifestStoreError>;
@@ -203,7 +203,7 @@ pub trait ManifestStore {
     /// Fetch all tags for a given repository.
     async fn get_repository_tags(
         &self,
-        repository: &str,
+        repository: &Repository,
     ) -> Result<protos::RepositoryTags, ManifestStoreError>;
 }
 
@@ -498,16 +498,16 @@ impl ManifestStore for LmdbManifestStore {
 
     async fn tag_manifest(
         &self,
-        repository: &str,
+        repository: &Repository,
         reference: &str,
         manifest_digest: &digest::Digest,
     ) -> Result<(), ManifestStoreError> {
         let env = self.env.clone();
         let repository_tags = self.repository_tags.clone();
         let digest_str = format!("{}", manifest_digest);
-        let repository_cloned = repository.to_string();
+        let repository_cloned = repository.name.to_string();
         let reference_cloned = reference.to_string();
-        let key = repository.to_string();
+        let key = repository.name.to_string();
 
         tokio::task::spawn_blocking(move || {
             let mut tx = env.write_txn()?;
@@ -538,11 +538,11 @@ impl ManifestStore for LmdbManifestStore {
 
     async fn get_repository_tags(
         &self,
-        repository: &str,
+        repository: &Repository,
     ) -> Result<protos::RepositoryTags, ManifestStoreError> {
         let env = self.env.clone();
         let repository_tags = self.repository_tags.clone();
-        let key = repository.to_string();
+        let key = repository.name.to_string();
 
         tokio::task::spawn_blocking(move || {
             let tx = env.read_txn()?;
@@ -585,7 +585,7 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
         .store_manifest(&digest, blob_locks, &image_manifest, content_type, body)
         .await?;
     manifest_store
-        .tag_manifest(&repository.name, &reference, &digest)
+        .tag_manifest(&repository, &reference, &digest)
         .await?;
 
     Ok(warp::http::response::Builder::new()
@@ -597,7 +597,7 @@ async fn process_manifest_put<M: ManifestStore + Send + Sync + 'static>(
 }
 
 async fn manifest_digest_for_tag<M>(
-    repository: &str,
+    repository: &Repository,
     tag: &str,
     manifest_store: &Arc<M>,
 ) -> Result<digest::Digest, Rejection>
@@ -610,7 +610,7 @@ where
         Err(ManifestStoreError::NotFound) => Err(ErrorResponse::new(
             StatusCode::NOT_FOUND,
             ErrorCode::NameUnknown,
-            format!("Failed to lookup repository tag for: {}", repository),
+            format!("Failed to lookup repository tag for: {}", repository.name),
         )
         .into()),
         Err(err) => {
@@ -664,7 +664,7 @@ where
 {
     let digest = match digest::Digest::try_from(&reference as &str) {
         Ok(d) => d,
-        Err(_err) => manifest_digest_for_tag(&repository.name, &reference, &manifest_store).await?,
+        Err(_err) => manifest_digest_for_tag(&repository, &reference, &manifest_store).await?,
     };
     let manifest = manifest_store.get_manifest(&digest).await?;
 
@@ -694,7 +694,7 @@ where
 {
     let digest = match digest::Digest::try_from(&reference as &str) {
         Ok(d) => d,
-        Err(_err) => manifest_digest_for_tag(&repository.name, &reference, &manifest_store).await?,
+        Err(_err) => manifest_digest_for_tag(&repository, &reference, &manifest_store).await?,
     };
 
     manifest_store.delete_manifest(&digest, blob_locks).await?;
