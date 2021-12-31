@@ -87,8 +87,11 @@ message ImageManifest {
     // Status of the manifest.
     ManifestStatus status = 1;
 
+    // The created time of the manifest
+    int64 created_at_seconds = 2;
+
     oneof manifest_version {
-	ImageManifestV2 v2 = 2;
+	ImageManifestV2 v2 = 3;
     }
 }
 

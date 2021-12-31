@@ -9,6 +9,7 @@ edition = "2018"
 async-trait = "0.1"
 base64 = "0.13"
 bytes = "1.0"
+chrono = "0.4"
 clap = { version = "3.0.0-rc.7", features = ["derive"] }
 futures = { version = "0.3", features = ["executor"] }
 futures-util = "0.3"

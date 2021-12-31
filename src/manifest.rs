@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
+use chrono::offset::Utc;
 use heed::types::{ByteSlice, OwnedType};
 use heed::RwTxn;
 use prost::Message;
@@ -101,11 +102,13 @@ pub fn parse_manifest_json(
     media_type: &str,
     json: &Bytes,
 ) -> Result<protos::ImageManifest, ImageManifestError> {
+    let created_time = Utc::now().timestamp();
     match media_type {
         "application/vnd.docker.distribution.manifest.v2+json" => {
             let manifest_v2: protos::ImageManifestV2 = serde_json::from_slice(json)?;
             let manifest = protos::ImageManifest {
                 status: protos::ManifestStatus::Active as i32,
+                created_at_seconds: created_time,
                 manifest_version: Some(protos::image_manifest::ManifestVersion::V2(manifest_v2)),
             };
             Ok(manifest)
