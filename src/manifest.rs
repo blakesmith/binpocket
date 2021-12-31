@@ -505,9 +505,9 @@ impl ManifestStore for LmdbManifestStore {
         let env = self.env.clone();
         let repository_tags = self.repository_tags.clone();
         let digest_str = format!("{}", manifest_digest);
-        let repository_cloned = repository.name.to_string();
+        let repository_name = repository.name.to_string();
         let reference_cloned = reference.to_string();
-        let key = repository.name.to_string();
+        let key = Vec::from(*repository.id.as_bytes());
 
         tokio::task::spawn_blocking(move || {
             let mut tx = env.write_txn()?;
@@ -516,21 +516,21 @@ impl ManifestStore for LmdbManifestStore {
                 manifest_digest: digest_str,
             };
 
-            let repo_tags = match repository_tags.get(&tx, key.as_bytes())? {
+            let repo_tags = match repository_tags.get(&tx, &key)? {
                 Some(b) => {
                     let mut existing = protos::RepositoryTags::decode(b)?;
                     existing.tag_references.push(new_tag);
                     Ok::<_, ManifestStoreError>(existing)
                 }
                 None => Ok(protos::RepositoryTags {
-                    repository: repository_cloned,
+                    repository: repository_name,
                     tag_references: vec![new_tag],
                 }),
             }?;
 
             let mut value = BytesMut::new();
             repo_tags.encode(&mut value)?;
-            repository_tags.put(&mut tx, key.as_bytes(), &value)?;
+            repository_tags.put(&mut tx, &key, &value)?;
             tx.commit().map_err(|err| err.into())
         })
         .await?
@@ -542,12 +542,12 @@ impl ManifestStore for LmdbManifestStore {
     ) -> Result<protos::RepositoryTags, ManifestStoreError> {
         let env = self.env.clone();
         let repository_tags = self.repository_tags.clone();
-        let key = repository.name.to_string();
+        let key = Vec::from(*repository.id.as_bytes());
 
         tokio::task::spawn_blocking(move || {
             let tx = env.read_txn()?;
             let buf = repository_tags
-                .get(&tx, key.as_bytes())?
+                .get(&tx, &key)?
                 .ok_or(ManifestStoreError::NotFound)?;
             Ok(protos::RepositoryTags::decode(buf)?)
         })
