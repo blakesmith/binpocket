@@ -11,7 +11,7 @@ buildRustPackage rec {
   src = builtins.filterSource
     (path: type: type != "directory" || baseNameOf path != "target")
     ./.;
-  cargoSha256 = "12bnqdyzdxihh540gph91apb19mz2rm0bs19fdjnp1p8hhcyvzp7";
+  cargoSha256 = "0iq1y4i13s3ldfwny350yiwxind8bv46s1ij9lvjqahjhpkl4zmg";
 
   # doc tests fail due to missing dependency
   doCheck = false;
