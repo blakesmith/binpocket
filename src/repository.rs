@@ -4,7 +4,7 @@ use crate::auth::{
     AuthzTarget, Visibility,
 };
 use crate::manifest::ManifestStore;
-use crate::ulid_util;
+use crate::ulid as ulid_util;
 use std::sync::Arc;
 use ulid::Ulid;
 use warp::{Filter, Rejection};

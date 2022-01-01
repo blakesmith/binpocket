@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package ulid;
+
+// A 'ulid' is another globally unique, random identifier, similar
+// to UUIDs, but without many of the downsides:
+//
+// 1. They take up the same 128 bit storage space as UUIDs.
+// 2. They have a leading millisecond precision timestamp prefix (so you can get the created time out of them).
+// 3. They sort lexicographically, which is much nicer on our B-Tree databases.
+//
+// See the project / spec here for more details: https://github.com/ulid/spec
+//
+message Ulid {
+    uint64 msb = 1;
+    uint64 lsb = 2;
+}

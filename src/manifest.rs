@@ -17,7 +17,7 @@ use crate::blob::BlobLocks;
 use crate::digest;
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::repository::{authorize_repository, protos as repo_protos, Repository};
-use crate::ulid_util;
+use crate::ulid as ulid_util;
 
 pub mod protos {
     use serde::Deserialize;

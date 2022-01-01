@@ -7,7 +7,7 @@ mod lock;
 mod manifest;
 mod range;
 mod repository;
-mod ulid_util;
+mod ulid;
 
 use binpocket::Config;
 use clap::Parser;
