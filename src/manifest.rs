@@ -17,6 +17,7 @@ use crate::blob::BlobLocks;
 use crate::digest;
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::repository::{authorize_repository, protos as repo_protos, Repository};
+use crate::ulid_util;
 
 pub mod protos {
     use serde::Deserialize;
@@ -125,7 +126,6 @@ pub enum ManifestStoreError {
     JoinError(tokio::task::JoinError),
     Lmdb(heed::Error),
     Conversion(ImageManifestError),
-    Uuid(String),
 }
 
 impl warp::reject::Reject for ManifestStoreError {}
@@ -357,7 +357,7 @@ impl ManifestStore for LmdbManifestStore {
                     }
 
                     let new_repo = repo_protos::Repository {
-                        id: Some(crate::uuid::new_v4_proto_uuid()),
+                        id: Some(ulid_util::new_proto()),
                         repository_type: repo_protos::RepositoryType::OciV2 as i32,
                         name: repository_name_owned.to_string(),
                     };
@@ -517,7 +517,7 @@ impl ManifestStore for LmdbManifestStore {
         let digest_str = format!("{}", manifest_digest);
         let repository_name = repository.name.to_string();
         let reference_cloned = reference.to_string();
-        let key = Vec::from(*repository.id.as_bytes());
+        let key = Vec::from(ulid_util::ulid_bytes(&repository.id));
 
         tokio::task::spawn_blocking(move || {
             let mut tx = env.write_txn()?;
@@ -552,7 +552,7 @@ impl ManifestStore for LmdbManifestStore {
     ) -> Result<protos::RepositoryTags, ManifestStoreError> {
         let env = self.env.clone();
         let repository_tags = self.repository_tags.clone();
-        let key = Vec::from(*repository.id.as_bytes());
+        let key = Vec::from(ulid_util::ulid_bytes(&repository.id));
 
         tokio::task::spawn_blocking(move || {
             let tx = env.read_txn()?;
@@ -572,7 +572,7 @@ impl ManifestStore for LmdbManifestStore {
         // for this, let's just pick a default.
 
         Ok(repo_protos::ImageRetentionPolicy {
-            repository_id: Some(crate::uuid::encode_to_proto(&repository.id)),
+            repository_id: Some(ulid_util::encode_to_proto(repository.id)),
             policy: Some(
                 repo_protos::image_retention_policy::Policy::KeepRecentCount(
                     repo_protos::KeepRecentCountPolicy { last_count: 5 },

@@ -17,10 +17,13 @@ fn main() -> Result<()> {
         "#[serde(rename_all = \"camelCase\")]",
     );
 
+    config.extern_path(".ulid", "crate::ulid_util::protos");
+
     config.compile_protos(
         &[
             "protos/manifest.proto",
             "protos/repository.proto",
+            "protos/ulid.proto",
             "protos/uuid.proto",
         ],
         &["protos/"],

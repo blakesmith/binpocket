@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package binpocket.repository;
 
-import "uuid.proto";
+import "ulid.proto";
 
 enum RepositoryType {
     // Docker / Open Container repository, V2.
@@ -10,7 +10,7 @@ enum RepositoryType {
 }
 
 message Repository {
-    uuid.UUID id = 1;
+    ulid.Ulid id = 1;
     RepositoryType repository_type = 2;
     string name = 3;
 }
@@ -38,7 +38,7 @@ message KeepRecentCountPolicy {
 //
 message ImageRetentionPolicy {
     // The repository ID this policy is associated with
-    uuid.UUID repository_id = 1;
+    ulid.Ulid repository_id = 1;
 
     oneof policy {
 	ExplicitDeleteOnlyPolicy explicit_delete = 2;

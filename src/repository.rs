@@ -3,10 +3,10 @@ use crate::auth::{
     resource::{Action, Resource},
     AuthzTarget, Visibility,
 };
-use crate::manifest::{ManifestStore, ManifestStoreError};
-use crate::uuid as proto_uuid;
+use crate::manifest::ManifestStore;
+use crate::ulid_util;
 use std::sync::Arc;
-use uuid::Uuid;
+use ulid::Ulid;
 use warp::{Filter, Rejection};
 
 pub mod protos {
@@ -15,7 +15,7 @@ pub mod protos {
 
 #[derive(Debug)]
 pub struct Repository {
-    pub id: Uuid,
+    pub id: Ulid,
     pub name: String,
 }
 
@@ -35,10 +35,9 @@ async fn lookup_repository<M: ManifestStore + Send + Sync + 'static>(
 ) -> Result<Repository, Rejection> {
     tracing::debug!("Repository name is: {}", name);
     let repository = manifest_store.get_or_create_repository(&name).await?;
-    let uuid = proto_uuid::decode_from_proto(&repository.id)
-        .map_err(|err| ManifestStoreError::Uuid(err))?;
+    let id = ulid_util::decode_from_proto(&repository.id);
     Ok(Repository {
-        id: uuid,
+        id: id,
         name: repository.name,
     })
 }
