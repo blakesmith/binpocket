@@ -21,7 +21,7 @@ use tokio::{
 };
 use tokio_util::codec::{BytesCodec, FramedRead};
 
-use uuid::Uuid;
+use ulid::Ulid;
 use warp::{
     http::{Response, StatusCode},
     Filter, Rejection, Reply,
@@ -43,7 +43,7 @@ use crate::{
 #[allow(dead_code)]
 pub enum BlobStoreError {
     Io(std::io::Error),
-    SessionNotFound(Uuid),
+    SessionNotFound(Ulid),
     UnsupportedDigest,
     NotFound,
     Unknown,
@@ -83,16 +83,16 @@ pub trait BlobStore {
     type Writer: AsyncWrite + Unpin + Send + Debug;
     type Reader: AsyncRead + Unpin + Send + Debug;
 
-    /// Begin uploading a blob, returns the session_id as a Uuid. After calling,
+    /// Begin uploading a blob, returns the session_id as a Ulid. After calling,
     /// clients should now be able to call 'get_session'.
-    async fn start_upload(&self) -> Result<Uuid, BlobStoreError>;
+    async fn start_upload(&self) -> Result<Ulid, BlobStoreError>;
 
     /// Retrieve the underlying session, and its associated writer, at the given
     /// byte offset position. Clients must call 'start_upload' to create the upload
     /// session before calling this function.
     async fn get_session(
         &self,
-        session_id: &Uuid,
+        session_id: &Ulid,
         pos: u64,
     ) -> Result<Arc<Mutex<UploadSession<Self::Writer>>>, BlobStoreError>;
 
@@ -102,12 +102,12 @@ pub trait BlobStore {
     /// transition the blob to stable, long-term, immutable storage.
     async fn finalize_upload(
         &self,
-        session_id: &Uuid,
+        session_id: &Ulid,
         digest: &digest::Digest,
     ) -> Result<(), BlobStoreError>;
 
     /// Cancel the upload, removing all temporary upload state.
-    async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError>;
+    async fn cancel_upload(&self, session_id: &Ulid) -> Result<(), BlobStoreError>;
 
     /// Fetch the blob's metadata, if it exists. This is mainly
     /// used to check if the blob already exists in the store, and
@@ -165,7 +165,7 @@ impl<B: BlobStore + Send + Sync + 'static> BlobStore for LockingBlobStore<B> {
     type Writer = B::Writer;
     type Reader = B::Reader;
 
-    async fn start_upload(&self) -> Result<Uuid, BlobStoreError> {
+    async fn start_upload(&self) -> Result<Ulid, BlobStoreError> {
         // No locking necessary. Sessions are transient, and exclusive
         // to a single client. Go straight to delegate store.
         self.delegate.start_upload().await
@@ -173,7 +173,7 @@ impl<B: BlobStore + Send + Sync + 'static> BlobStore for LockingBlobStore<B> {
 
     async fn get_session(
         &self,
-        session_id: &Uuid,
+        session_id: &Ulid,
         pos: u64,
     ) -> Result<Arc<Mutex<UploadSession<Self::Writer>>>, BlobStoreError> {
         // No locking necessary. Sessions are transient, and exclusive
@@ -183,7 +183,7 @@ impl<B: BlobStore + Send + Sync + 'static> BlobStore for LockingBlobStore<B> {
 
     async fn finalize_upload(
         &self,
-        session_id: &Uuid,
+        session_id: &Ulid,
         digest: &digest::Digest,
     ) -> Result<(), BlobStoreError> {
         // Exclusive lock on the blob before finalizing it into
@@ -194,7 +194,7 @@ impl<B: BlobStore + Send + Sync + 'static> BlobStore for LockingBlobStore<B> {
         self.delegate.finalize_upload(session_id, digest).await
     }
 
-    async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError> {
+    async fn cancel_upload(&self, session_id: &Ulid) -> Result<(), BlobStoreError> {
         // No locking necessary, go straight to delegate store.
         self.delegate.cancel_upload(session_id).await
     }
@@ -245,7 +245,7 @@ impl BlobLocks {
 /// is tracking once an upload is completed or aborted.
 #[derive(Debug)]
 pub struct UploadSession<W: AsyncWrite + Unpin + Send + Debug> {
-    id: Uuid,
+    id: Ulid,
     writer: W,
     bytes_written: u64,
     sha256: Sha256,
@@ -285,7 +285,7 @@ impl<W: AsyncWrite + Unpin + Send + Debug> AsyncWrite for UploadSession<W> {
 }
 
 impl<W: AsyncWrite + Unpin + Send + Debug> UploadSession<W> {
-    fn new(writer: W, id: Uuid) -> Self {
+    fn new(writer: W, id: Ulid) -> Self {
         Self {
             id,
             writer,
@@ -320,7 +320,7 @@ pub struct FsBlobStore {
     ///
     /// TODO: We must periodically clean this up to prevent resource
     /// leaks!
-    sessions: RwLock<HashMap<Uuid, Arc<Mutex<UploadSession<File>>>>>,
+    sessions: RwLock<HashMap<Ulid, Arc<Mutex<UploadSession<File>>>>>,
 }
 
 impl FsBlobStore {
@@ -341,8 +341,8 @@ impl BlobStore for FsBlobStore {
     type Writer = File;
     type Reader = File;
 
-    async fn start_upload(&self) -> Result<Uuid, BlobStoreError> {
-        let session_id = Uuid::new_v4();
+    async fn start_upload(&self) -> Result<Ulid, BlobStoreError> {
+        let session_id = Ulid::new();
         let file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -350,7 +350,7 @@ impl BlobStore for FsBlobStore {
             .open(
                 self.root_directory
                     .join("sessions")
-                    .join(format!("{}", session_id.to_hyphenated_ref())),
+                    .join(format!("{}", session_id.to_string())),
             )
             .await?;
         let session = UploadSession::new(file, session_id.clone());
@@ -363,7 +363,7 @@ impl BlobStore for FsBlobStore {
 
     async fn get_session(
         &self,
-        session_id: &Uuid,
+        session_id: &Ulid,
         pos: u64,
     ) -> Result<Arc<Mutex<UploadSession<Self::Writer>>>, BlobStoreError> {
         let session = self
@@ -385,7 +385,7 @@ impl BlobStore for FsBlobStore {
 
     async fn finalize_upload(
         &self,
-        session_id: &Uuid,
+        session_id: &Ulid,
         digest: &digest::Digest,
     ) -> Result<(), BlobStoreError> {
         let session = self
@@ -403,7 +403,7 @@ impl BlobStore for FsBlobStore {
         fs::rename(
             self.root_directory
                 .join("sessions")
-                .join(format!("{}", session_id.to_hyphenated_ref())),
+                .join(format!("{}", session_id.to_string())),
             self.root_directory
                 .join("blobs")
                 .join(format!("{}", digest)),
@@ -413,7 +413,7 @@ impl BlobStore for FsBlobStore {
         Ok(())
     }
 
-    async fn cancel_upload(&self, session_id: &Uuid) -> Result<(), BlobStoreError> {
+    async fn cancel_upload(&self, session_id: &Ulid) -> Result<(), BlobStoreError> {
         let _ = self
             .sessions
             .write()
@@ -425,7 +425,7 @@ impl BlobStore for FsBlobStore {
         fs::remove_file(
             self.root_directory
                 .join("sessions")
-                .join(format!("{}", session_id.to_hyphenated_ref())),
+                .join(format!("{}", session_id.to_string())),
         )
         .await?;
 
@@ -482,7 +482,7 @@ struct BlobPutQueryParams {
 
 async fn receive_upload<B, S, BUF>(
     repository: Repository,
-    session_id: Uuid,
+    session_id: Ulid,
     query_params: BlobPutQueryParams,
     content_range: Option<ContentRange>,
     blob_store: Arc<B>,
@@ -592,10 +592,7 @@ where
                     "Location",
                     format!("/v2/{}/blobs/uploads/{}", &repository.name, &session_id),
                 )
-                .header(
-                    "Docker-Upload-UUID",
-                    session_id.to_hyphenated_ref().to_string(),
-                )
+                .header("Docker-Upload-UUID", session_id.to_string())
                 .header("Range", range)
                 .status(StatusCode::ACCEPTED)
                 .body("")
@@ -606,7 +603,7 @@ where
 
 async fn receive_put_upload<B, S, BUF>(
     repository: Repository,
-    session_id: Uuid,
+    session_id: Ulid,
     query_params: BlobPutQueryParams,
     blob_store: Arc<B>,
     byte_stream: S,
@@ -629,7 +626,7 @@ where
 
 async fn receive_patch_upload<B, S, BUF>(
     repository: Repository,
-    session_id: Uuid,
+    session_id: Ulid,
     content_range: Option<ContentRange>,
     blob_store: Arc<B>,
     byte_stream: S,
@@ -678,7 +675,7 @@ where
             let location = format!(
                 "/v2/{}/blobs/uploads/{}",
                 &repository.name,
-                session_id.to_hyphenated_ref()
+                session_id.to_string()
             );
 
             Ok(warp::http::response::Builder::new()
@@ -798,7 +795,7 @@ where
 {
     warp::put()
         .and(authorize_repository::<M>(Action::Write))
-        .and(warp::path!("blobs" / "uploads" / Uuid))
+        .and(warp::path!("blobs" / "uploads" / Ulid))
         .and(warp::query::<BlobPutQueryParams>())
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
@@ -828,7 +825,7 @@ where
 {
     warp::patch()
         .and(authorize_repository::<M>(Action::Write))
-        .and(warp::path!("blobs" / "uploads" / Uuid))
+        .and(warp::path!("blobs" / "uploads" / Ulid))
         .and(warp::header::optional::<ContentRange>("Content-Range"))
         .and(warp::filters::ext::get::<Arc<B>>())
         .and(warp::filters::body::stream())
