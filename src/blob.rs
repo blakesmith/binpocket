@@ -379,8 +379,8 @@ pub struct FsBlobStore {
     /// endpoint calls, since we want to support chunked uploading. We
     /// must wrap each session in its own lock for safety.
     ///
-    /// TODO: We must periodically clean this up to prevent resource
-    /// leaks!
+    /// This gets periodically cleaned up by the BlobJanitor.
+    ///
     sessions: RwLock<HashMap<Ulid, Arc<Mutex<UploadSession<File>>>>>,
 }
 
