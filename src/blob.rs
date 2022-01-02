@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bytes::Buf;
+use chrono::{offset::Utc, DateTime, Duration};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use tokio::sync::{Mutex, RwLock};
@@ -44,6 +45,7 @@ use crate::{
 pub enum BlobStoreError {
     Io(std::io::Error),
     SessionNotFound(Ulid),
+    InvalidUlid(ulid::DecodeError),
     UnsupportedDigest,
     NotFound,
     Unknown,
@@ -52,6 +54,12 @@ pub enum BlobStoreError {
 impl From<std::io::Error> for BlobStoreError {
     fn from(e: std::io::Error) -> Self {
         BlobStoreError::Io(e)
+    }
+}
+
+impl From<ulid::DecodeError> for BlobStoreError {
+    fn from(e: ulid::DecodeError) -> Self {
+        BlobStoreError::InvalidUlid(e)
     }
 }
 
@@ -95,6 +103,17 @@ pub trait BlobStore {
         session_id: &Ulid,
         pos: u64,
     ) -> Result<Arc<Mutex<UploadSession<Self::Writer>>>, BlobStoreError>;
+
+    /// Prune old sessions that are older than a given duration from the
+    /// passed in current time. Because uploads can be interrupted and
+    /// restarted, we give them a grace period where they can theoretically
+    /// be initiated by the client again. This function implements the cleanup
+    /// for sessions that get permanently abandoned.
+    async fn prune_inactive_sessions(
+        &self,
+        older_than: Duration,
+        current_time: DateTime<Utc>,
+    ) -> Result<(u64, u64), BlobStoreError>;
 
     /// Finalize the upload session, producing an immutable Digest that will
     /// be used as the blob identifier going forward. Implementations can
@@ -179,6 +198,16 @@ impl<B: BlobStore + Send + Sync + 'static> BlobStore for LockingBlobStore<B> {
         // No locking necessary. Sessions are transient, and exclusive
         // to a single client. Go straight to delegate store.
         self.delegate.get_session(session_id, pos).await
+    }
+
+    async fn prune_inactive_sessions(
+        &self,
+        older_than: Duration,
+        current_time: DateTime<Utc>,
+    ) -> Result<(u64, u64), BlobStoreError> {
+        self.delegate
+            .prune_inactive_sessions(older_than, current_time)
+            .await
     }
 
     async fn finalize_upload(
@@ -381,6 +410,42 @@ impl BlobStore for FsBlobStore {
             .seek(SeekFrom::Start(pos))
             .await?;
         Ok(session)
+    }
+
+    async fn prune_inactive_sessions(
+        &self,
+        older_than: Duration,
+        current_time: DateTime<Utc>,
+    ) -> Result<(u64, u64), BlobStoreError> {
+        let mut sessions_to_prune = Vec::new();
+        let mut read_dir = fs::read_dir(self.root_directory.join("sessions")).await?;
+        while let Some(entry) = read_dir.next_entry().await? {
+            let filename = match entry.file_name().into_string() {
+                Ok(utf8_string) => utf8_string,
+                Err(invalid_file) => {
+                    tracing::warn!("Invalid utf8 filename: {:?}", invalid_file);
+                    continue;
+                }
+            };
+
+            let session_id = ulid::Ulid::from_string(&filename)?;
+            let session_datetime = session_id.datetime();
+
+            if (current_time - session_datetime) > older_than {
+                sessions_to_prune.push(session_id);
+            }
+        }
+
+        // Now prune sessions
+        let mut map_pruned = 0;
+        let mut sessions = self.sessions.write().await;
+        for session_id in sessions_to_prune.iter() {
+            if sessions.remove(&session_id).is_some() {
+                map_pruned += 1;
+            }
+        }
+
+        Ok((map_pruned, sessions_to_prune.len() as u64))
     }
 
     async fn finalize_upload(
@@ -843,4 +908,43 @@ where
         .or(blob_upload_post::<B, M>())
         .or(blob_upload_put::<B, M>())
         .or(blob_upload_patch::<B, M>())
+}
+
+#[cfg(test)]
+use tempfile::tempdir;
+
+#[tokio::test]
+async fn test_fs_blob_store_pruning_inactive_upload_sessions() {
+    let store_path = tempdir().unwrap().into_path();
+    let blob_store = FsBlobStore::open(store_path).expect("Could not open FS blob store");
+    let session_id = blob_store
+        .start_upload()
+        .await
+        .expect("Could not start upload session");
+
+    let restarted_session = blob_store
+        .get_session(&session_id, 0)
+        .await
+        .expect("Could not retrieve existing upload session");
+
+    // Simulate more time than our duration passing.
+    let duration = Duration::hours(1);
+    let current_time = Utc::now() + duration + Duration::seconds(1);
+
+    let (map_pruned, fs_pruned) = blob_store
+        .prune_inactive_sessions(duration, current_time)
+        .await
+        .expect("Could not prune inactive sessions");
+
+    assert_eq!(1, map_pruned);
+    assert_eq!(1, fs_pruned);
+
+    let not_found_session = blob_store
+        .get_session(&session_id, 0)
+        .await
+        .expect_err("Inactive session should be missing");
+    match not_found_session {
+        BlobStoreError::SessionNotFound(_) => {}
+        e => panic!("Session should be not found, instead got: {:?}", e),
+    }
 }
