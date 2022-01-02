@@ -22,7 +22,7 @@ use crate::auth::{
     Authorizer, FixedPrincipalAuthenticator,
 };
 use crate::{
-    blob::{self, FsBlobStore, LockingBlobStore},
+    blob::{self, BlobJanitor, FsBlobStore, LockingBlobStore},
     error, manifest,
 };
 
@@ -139,7 +139,7 @@ pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
         .layer(TraceLayer::new_for_http().on_response(DefaultOnResponse::new().level(Level::INFO)))
         .layer(CompressionLayer::new())
         .layer(AddExtensionLayer::new(blob_store.locks()))
-        .layer(AddExtensionLayer::new(blob_store))
+        .layer(AddExtensionLayer::new(blob_store.clone()))
         .layer(AddExtensionLayer::new(manifest_store))
         .layer(AddExtensionLayer::new(authenticator))
         .layer(AddExtensionLayer::new(authorizer))
@@ -147,6 +147,10 @@ pub async fn serve(config: &Config) -> Result<(), BinpocketError> {
         .service(warp_service);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.listen_port));
     let listener = TcpListener::bind(addr).unwrap();
+
+    let blob_janitor = BlobJanitor::new(blob_store, core::time::Duration::new(3600, 0));
+
+    let _blob_janitor_handle = tokio::task::spawn(async move { blob_janitor.cleanup().await });
 
     tracing::info!("Listening on port: {}", config.listen_port);
 

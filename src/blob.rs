@@ -340,6 +340,38 @@ impl<W: AsyncWrite + Unpin + Send + Debug> UploadSession<W> {
     }
 }
 
+/// Background 'janitor' that cleans up old upload sessions, and
+/// deletes blobs that are orphaned.
+pub struct BlobJanitor<B: BlobStore + Send + Sync + 'static> {
+    blob_store: Arc<B>,
+    period: core::time::Duration,
+}
+
+impl<B: BlobStore + Send + Sync + 'static> BlobJanitor<B> {
+    pub fn new(blob_store: Arc<B>, period: core::time::Duration) -> Self {
+        Self { blob_store, period }
+    }
+
+    pub async fn cleanup(&self) -> Result<(), BlobStoreError> {
+        tracing::info!("Blob janitor starting up with period: {:?}", self.period);
+        let mut interval = tokio::time::interval(self.period);
+
+        loop {
+            let tick = interval.tick().await;
+            tracing::info!("Blob janitor starting to clean up the mess, at: {:?}", tick);
+            let (map_pruned, fs_pruned) = self
+                .blob_store
+                .prune_inactive_sessions(Duration::hours(1), Utc::now())
+                .await?;
+            tracing::info!(
+                "Blob Janitor done. Cleaned up {} sessions in the session map, and {} sessions on the filesystem",
+                map_pruned,
+                fs_pruned
+            )
+        }
+    }
+}
+
 pub struct FsBlobStore {
     root_directory: PathBuf,
 
@@ -438,14 +470,25 @@ impl BlobStore for FsBlobStore {
 
         // Now prune sessions
         let mut map_pruned = 0;
+        let mut fs_pruned = 0;
         let mut sessions = self.sessions.write().await;
         for session_id in sessions_to_prune.iter() {
             if sessions.remove(&session_id).is_some() {
                 map_pruned += 1;
             }
+            if fs::remove_file(
+                self.root_directory
+                    .join("sessions")
+                    .join(format!("{}", session_id.to_string())),
+            )
+            .await
+            .is_ok()
+            {
+                fs_pruned += 1;
+            }
         }
 
-        Ok((map_pruned, sessions_to_prune.len() as u64))
+        Ok((map_pruned, fs_pruned))
     }
 
     async fn finalize_upload(
@@ -922,7 +965,7 @@ async fn test_fs_blob_store_pruning_inactive_upload_sessions() {
         .await
         .expect("Could not start upload session");
 
-    let restarted_session = blob_store
+    let _restarted_session = blob_store
         .get_session(&session_id, 0)
         .await
         .expect("Could not retrieve existing upload session");
