@@ -1,37 +1,6 @@
-[package]
-name = "binpocket"
-version = "0.1.0"
-edition = "2018"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-async-trait = "0.1"
-base64 = "0.13"
-bytes = "1.0"
-chrono = "0.4"
-clap = { version = "3.0.0-rc.7", features = ["derive"] }
-futures = { version = "0.3", features = ["executor"] }
-futures-util = "0.3"
-heed = "0.10.6"
-hyper = { version = "0.14", features = ["full"] }
-jwt-simple = "0.10"
-prost = "0.9"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml = "0.8"
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.6", features = ["codec"] }
-tower = { version = "0.4", features = ["full"] }
-tower-http = { version = "0.1", features = ["full"] }
-sha2 = "0.9"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-ulid = { version = "0.5.0", features = ["serde"] }
-warp = "0.3"
-
-[build-dependencies]
-prost-build = { version = "0.9" }
-
-[dev-dependencies]
-tempfile = "3.2"
+members = [
+  "binpocket",
+  "bp_protos",
+]

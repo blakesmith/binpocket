@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use bp_protos::{manifest as protos, repository as repo_protos, ulid as ulid_util};
 use bytes::{Bytes, BytesMut};
 use chrono::offset::Utc;
 use heed::types::{ByteSlice, OwnedType};
@@ -16,14 +17,7 @@ use crate::auth::resource::Action;
 use crate::blob::BlobLocks;
 use crate::digest;
 use crate::error::{ErrorCode, ErrorResponse};
-use crate::repository::{authorize_repository, protos as repo_protos, Repository};
-use crate::ulid as ulid_util;
-
-pub mod protos {
-    use serde::Deserialize;
-
-    include!(concat!(env!("OUT_DIR"), "/binpocket.manifest.rs"));
-}
+use crate::repository::{authorize_repository, Repository};
 
 /// Simple increment / decrement enum.
 /// TODO: Move somewhere else?

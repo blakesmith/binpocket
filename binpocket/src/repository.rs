@@ -4,14 +4,10 @@ use crate::auth::{
     AuthzTarget, Visibility,
 };
 use crate::manifest::ManifestStore;
-use crate::ulid as ulid_util;
+use bp_protos::ulid as ulid_util;
 use std::sync::Arc;
 use ulid::Ulid;
 use warp::{Filter, Rejection};
-
-pub mod protos {
-    include!(concat!(env!("OUT_DIR"), "/binpocket.repository.rs"));
-}
 
 #[derive(Debug)]
 pub struct Repository {

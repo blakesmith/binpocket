@@ -19,9 +19,9 @@ fn main() -> Result<()> {
 
     config.compile_protos(
         &[
+            "protos/ulid.proto",
             "protos/manifest.proto",
             "protos/repository.proto",
-            "protos/ulid.proto",
         ],
         &["protos/"],
     )?;

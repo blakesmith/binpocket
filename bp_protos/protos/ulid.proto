@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package ulid;
+package binpocket.ulid;
 
 // A 'ulid' is another globally unique, random identifier, similar
 // to UUIDs, but without many of the downsides:
