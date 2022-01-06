@@ -9,7 +9,7 @@ pub mod manifest {
 }
 
 pub mod ulid {
-    include!(concat!(env!("OUT_DIR"), "/ulid.rs"));
+    include!(concat!(env!("OUT_DIR"), "/binpocket.ulid.rs"));
 
     pub fn new_proto() -> self::Ulid {
         encode_to_proto(ulid::Ulid::new())
