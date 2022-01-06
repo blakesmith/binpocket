@@ -3,4 +3,5 @@
 members = [
   "binpocket",
   "bp_protos",
+  "oci",
 ]

@@ -1,16 +1,5 @@
-mod auth;
-mod binpocket;
-mod blob;
-mod digest;
-mod error;
-mod lock;
-mod manifest;
-mod range;
-mod repository;
-mod scanner;
-
-use binpocket::Config;
 use clap::Parser;
+use oci::http_service::{self, Config};
 use tracing::metadata::Level;
 
 /// Run the binpocket server.
@@ -44,7 +33,7 @@ async fn main() {
     let file = std::fs::File::open(&opts.config).expect("Could not open configuration file");
     let config: Config =
         serde_yaml::from_reader(file).expect("Could not deserialize configuration");
-    binpocket::serve(&config)
+    http_service::serve(&config)
         .await
         .expect("Could not serve binpocket");
 }
