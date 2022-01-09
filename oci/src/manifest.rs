@@ -14,7 +14,7 @@ use warp::{
 };
 
 use crate::auth::resource::Action;
-use crate::blob::BlobLocks;
+use crate::blob::{BlobLocks, BlobStoreError};
 use crate::digest;
 use crate::error::{ErrorCode, ErrorResponse};
 use crate::repository::{authorize_repository, Repository};
@@ -151,6 +151,16 @@ impl From<prost::DecodeError> for ManifestStoreError {
     }
 }
 
+/// Statistics that get produced during a garbage collect operation. Mostly
+/// used for blob reference count mark and sweep operations.
+pub struct GCStats {
+    /// Number of items scanned during the gc run.
+    items_scanned: u64,
+
+    /// Number of items that were 'sweeped' during the gc run.
+    items_swept: u64,
+}
+
 /// Used to store and retrieve manifests. Manifests are keyed by
 /// their content addressable digest.
 #[async_trait]
@@ -209,6 +219,12 @@ pub trait ManifestStore {
         &self,
         repository: &Repository,
     ) -> Result<repo_protos::ImageRetentionPolicy, ManifestStoreError>;
+
+    async fn garbage_collect_blobs(
+        &self,
+        blob_locks: BlobLocks,
+        sweep_fn: Box<dyn FnOnce(&digest::Digest) -> Result<(), BlobStoreError> + Send + Sync>,
+    ) -> Result<GCStats, ManifestStoreError>;
 }
 
 pub struct LmdbManifestStore {
@@ -573,6 +589,14 @@ impl ManifestStore for LmdbManifestStore {
                 ),
             ),
         })
+    }
+
+    async fn garbage_collect_blobs(
+        &self,
+        blob_locks: BlobLocks,
+        sweep_fn: Box<dyn FnOnce(&digest::Digest) -> Result<(), BlobStoreError> + Send + Sync>,
+    ) -> Result<GCStats, ManifestStoreError> {
+        todo!()
     }
 }
 
