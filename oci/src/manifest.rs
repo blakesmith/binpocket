@@ -605,15 +605,12 @@ impl ManifestStore for LmdbManifestStore {
             dyn FnMut(&digest::Digest) -> Result<(), ManifestStoreError> + Send + Sync,
         >,
     ) -> Result<GCStats, ManifestStoreError> {
-        let env = self.env.clone();
-        let manifest_blob_references = self.manifest_blob_references.clone();
-
         let mut items_scanned = 0;
         let mut items_dead = 0;
         let mut items_swept = 0;
 
-        let txn = env.read_txn()?;
-        let mut blob_ref_it = manifest_blob_references.iter(&txn)?.into_iter();
+        let txn = self.env.read_txn()?;
+        let mut blob_ref_it = self.manifest_blob_references.iter(&txn)?.into_iter();
         tracing::info!("Starting blob reference scan");
 
         while let Some(Ok((key, value))) = blob_ref_it.next() {
