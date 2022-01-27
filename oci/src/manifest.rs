@@ -620,8 +620,9 @@ impl ManifestStore for LmdbManifestStore {
                 items_dead += 1;
                 let digest = digest::Digest::try_from(key)
                     .map_err(|err| ManifestStoreError::DigestDecode(err))?;
-                if sweep_fn(&digest).is_ok() {
-                    items_swept += 1;
+                match sweep_fn(&digest) {
+                    Ok(_) => items_swept += 1,
+                    Err(err) => tracing::error!("Error when garbage collecting sweep: {:?}", err),
                 }
             }
         }
