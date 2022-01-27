@@ -64,6 +64,16 @@ impl Digest {
     }
 }
 
+impl TryFrom<&[u8]> for Digest {
+    type Error = String;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let string_value = std::str::from_utf8(value)
+            .map_err(|err| format!("Digest conversion error: {:?}", err))?;
+        Self::try_from(string_value)
+    }
+}
+
 impl TryFrom<&str> for Digest {
     type Error = String;
 

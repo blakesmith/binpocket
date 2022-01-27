@@ -120,6 +120,7 @@ pub enum ManifestStoreError {
     JoinError(tokio::task::JoinError),
     Lmdb(heed::Error),
     Conversion(ImageManifestError),
+    DigestDecode(String),
 }
 
 impl warp::reject::Reject for ManifestStoreError {}
@@ -153,9 +154,13 @@ impl From<prost::DecodeError> for ManifestStoreError {
 
 /// Statistics that get produced during a garbage collect operation. Mostly
 /// used for blob reference count mark and sweep operations.
+#[derive(Debug, Clone, Copy)]
 pub struct GCStats {
     /// Number of items scanned during the gc run.
     items_scanned: u64,
+
+    /// Number of items that are 'dead'
+    items_dead: u64,
 
     /// Number of items that were 'sweeped' during the gc run.
     items_swept: u64,
@@ -220,10 +225,12 @@ pub trait ManifestStore {
         repository: &Repository,
     ) -> Result<repo_protos::ImageRetentionPolicy, ManifestStoreError>;
 
-    async fn garbage_collect_blobs(
+    /// Execute a blocking garbage collect operation. Note that garbage
+    /// collection does not happen asynchronously.
+    fn garbage_collect_blobs(
         &self,
         blob_locks: BlobLocks,
-        sweep_fn: Box<dyn FnOnce(&digest::Digest) -> Result<(), BlobStoreError> + Send + Sync>,
+        sweep_fn: Box<dyn FnMut(&digest::Digest) -> Result<(), ManifestStoreError> + Send + Sync>,
     ) -> Result<GCStats, ManifestStoreError>;
 }
 
@@ -300,7 +307,7 @@ impl LmdbManifestStore {
         // We need to acquire any blob locks before we're adjusting
         // reference counts. If all our state was kept internally in
         // LMDB, this wouldn't be necessary, as the writer would enable
-        // exclusive access: However, because we store blobs externally
+        // exclusive mutation access: However, because we store blobs externally
         // from LMDB, we also need to hold any locks before we adjust internal
         // state. This prevents external deletions / mutations from occuring
         let lock_ref = blob_locks.acquire_blob_lock_ref(digest.clone());
@@ -591,12 +598,48 @@ impl ManifestStore for LmdbManifestStore {
         })
     }
 
-    async fn garbage_collect_blobs(
+    fn garbage_collect_blobs(
         &self,
         blob_locks: BlobLocks,
-        sweep_fn: Box<dyn FnOnce(&digest::Digest) -> Result<(), BlobStoreError> + Send + Sync>,
+        mut sweep_fn: Box<
+            dyn FnMut(&digest::Digest) -> Result<(), ManifestStoreError> + Send + Sync,
+        >,
     ) -> Result<GCStats, ManifestStoreError> {
-        todo!()
+        let env = self.env.clone();
+        let manifest_blob_references = self.manifest_blob_references.clone();
+
+        let mut items_scanned = 0;
+        let mut items_dead = 0;
+        let mut items_swept = 0;
+
+        let txn = env.read_txn()?;
+        let mut blob_ref_it = manifest_blob_references.iter(&txn)?.into_iter();
+        tracing::info!("Starting blob reference scan");
+
+        while let Some(Ok((key, value))) = blob_ref_it.next() {
+            items_scanned += 1;
+
+            if value == 0 {
+                items_dead += 1;
+                let digest = digest::Digest::try_from(key)
+                    .map_err(|err| ManifestStoreError::DigestDecode(err))?;
+                if sweep_fn(&digest).is_ok() {
+                    items_swept += 1;
+                }
+            }
+        }
+
+        let stats = GCStats {
+            items_scanned,
+            items_dead,
+            items_swept,
+        };
+        tracing::info!("Done with blob reference scan. Got stats: {:?}", stats);
+
+        // TODO: Delete the actual blob references themselves that are 0, to free up
+        // space.
+
+        Ok(stats)
     }
 }
 
