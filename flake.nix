@@ -1,4 +1,6 @@
 {
+  description = "Binpocket server";
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-22.11";
     naersk = {
@@ -17,14 +19,15 @@
         pkgs = import nixpkgs { inherit system; };
         naersk-lib = pkgs.callPackage naersk { };
       in
-      {
-        defaultPackage = naersk-lib.buildPackage {
-          src = ./.;
-          PROTOC = "${pkgs.protobuf}/bin/protoc";
-        };
-        devShell = with pkgs; mkShell {
-          buildInputs = [ cargo rustc rustfmt pre-commit rustPackages.clippy ];
-          RUST_SRC_PATH = rustPlatform.rustLibSrc;
-        };
+        {
+          packages.binpocket = naersk-lib.buildPackage {
+            src = ./.;
+            PROTOC = "${pkgs.protobuf}/bin/protoc";
+          };
+          defaultPackage = self.packages.${system}.binpocket;
+          devShell = with pkgs; mkShell {
+            buildInputs = [ cargo rustc rustfmt pre-commit rustPackages.clippy ];
+            RUST_SRC_PATH = rustPlatform.rustLibSrc;
+          };
       });
 }
