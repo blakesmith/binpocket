@@ -1,4 +1,7 @@
+{ binpocket }:
+
 { config, lib, pkgs, ... }:
+
 with lib;
 let
   cfg = config.services.binpocket;
@@ -68,7 +71,7 @@ in {
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
       script = ''
-      exec ${pkgs.binpocket}/bin/binpocket \
+      exec ${binpocket}/bin/binpocket \
       --config ${configFile}
       '';
 
