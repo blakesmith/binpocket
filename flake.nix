@@ -24,6 +24,7 @@
             src = ./.;
             PROTOC = "${pkgs.protobuf}/bin/protoc";
           };
+          nixosModules.binpocket = import ./nix/modules/binpocket.nix;
           defaultPackage = self.packages.${system}.binpocket;
           devShell = with pkgs; mkShell {
             buildInputs = [ cargo rustc rustfmt pre-commit rustPackages.clippy ];
